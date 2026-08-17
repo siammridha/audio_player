@@ -1,0 +1,26 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Runs on GitHub's x86_64 runner, inside a native x86_64 Alpine
+    # container - this matches the Wyse 3040's CPU and OS exactly, so it's a
+    # normal build, not a cross-compile.
+    runs-on: ubuntu-latest
+    container: alpine:3.23
+    steps:
+      - name: Install build tools
+        run: apk add --no-cache git rust cargo alsa-lib-dev build-base
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: cargo build --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audio-player-x86_64-alpine
+          path: target/release/audio-player

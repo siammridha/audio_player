@@ -1,0 +1,194 @@
+<title>Audio Player</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #121212;
+    --panel: #1c1c1c;
+    --text: #eeeeee;
+    --muted: #888888;
+    --orange: #ff8c1a;
+    --orange-dim: #7a4a12;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 2rem 1rem;
+  }
+  main { width: 100%; max-width: 28rem; }
+  h1 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--orange);
+    margin: 0 0 1.25rem;
+  }
+  #now-playing {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin: 0 0 1.5rem;
+    min-height: 1.2em;
+  }
+  #now-playing strong { color: var(--text); font-weight: 500; }
+  ul#files {
+    list-style: none;
+    margin: 0 0 1.5rem;
+    padding: 0;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  #files li + li { border-top: 1px solid #2a2a2a; }
+  #files button {
+    width: 100%;
+    text-align: left;
+    background: var(--panel);
+    color: var(--text);
+    border: none;
+    padding: 0.75rem 1rem;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  #files button:hover { background: #262626; }
+  #files button.active { color: var(--orange); font-weight: 600; }
+  #empty {
+    color: var(--muted);
+    font-size: 0.9rem;
+    padding: 0.75rem 1rem;
+  }
+  .controls { display: flex; gap: 0.75rem; }
+  .controls button {
+    flex: 1;
+    padding: 0.85rem 0.5rem;
+    font-size: 1rem;
+    border-radius: 8px;
+    border: 1px solid #2a2a2a;
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .controls button:disabled { opacity: 0.4; cursor: default; }
+  #play-pause {
+    background: var(--orange);
+    color: #1a1200;
+    font-weight: 700;
+    border-color: var(--orange);
+    flex: 2;
+  }
+  #play-pause:disabled { background: var(--orange-dim); color: #1a1a1a; }
+  #loop.on {
+    color: var(--orange);
+    border-color: var(--orange);
+  }
+</style>
+
+<main>
+  <h1>Audio Player</h1>
+  <p id="now-playing">Nothing selected</p>
+
+  <ul id="files"></ul>
+
+  <div class="controls">
+    <button id="play-pause" disabled>Play</button>
+    <button id="restart" disabled>Start Over</button>
+    <button id="loop" disabled>Loop</button>
+  </div>
+</main>
+
+<script>
+  const filesEl = document.getElementById("files");
+  const nowPlayingEl = document.getElementById("now-playing");
+  const playPauseEl = document.getElementById("play-pause");
+  const restartEl = document.getElementById("restart");
+  const loopEl = document.getElementById("loop");
+
+  let files = [];
+
+  async function api(path, options) {
+    const res = await fetch(path, options);
+    return res.json();
+  }
+
+  function renderFiles(status) {
+    filesEl.innerHTML = "";
+    if (files.length === 0) {
+      const li = document.createElement("li");
+      li.id = "empty";
+      li.textContent = "No audio files found.";
+      filesEl.appendChild(li);
+      return;
+    }
+    for (const name of files) {
+      const li = document.createElement("li");
+      const button = document.createElement("button");
+      button.textContent = name;
+      if (name === status.file) button.classList.add("active");
+      button.addEventListener("click", () => play(name));
+      li.appendChild(button);
+      filesEl.appendChild(li);
+    }
+  }
+
+  function renderStatus(status) {
+    nowPlayingEl.innerHTML = status.file
+      ? `Playing: <strong>${status.file}</strong>`
+      : "Nothing selected";
+
+    playPauseEl.disabled = !status.file;
+    restartEl.disabled = !status.file;
+    loopEl.disabled = false;
+
+    playPauseEl.textContent = status.playing ? "Pause" : "Play";
+    loopEl.classList.toggle("on", status.loop);
+
+    for (const button of filesEl.querySelectorAll("button")) {
+      button.classList.toggle("active", button.textContent === status.file);
+    }
+  }
+
+  async function refreshStatus() {
+    const status = await api("/api/status");
+    renderStatus(status);
+    return status;
+  }
+
+  async function play(name) {
+    const status = await api("/api/play", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file: name }),
+    });
+    renderStatus(status);
+  }
+
+  playPauseEl.addEventListener("click", async () => {
+    renderStatus(await api("/api/toggle", { method: "POST" }));
+  });
+
+  restartEl.addEventListener("click", async () => {
+    renderStatus(await api("/api/restart", { method: "POST" }));
+  });
+
+  loopEl.addEventListener("click", async () => {
+    const wantsLoop = !loopEl.classList.contains("on");
+    renderStatus(
+      await api("/api/loop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ loop: wantsLoop }),
+      })
+    );
+  });
+
+  (async function init() {
+    files = await api("/api/files");
+    const status = await refreshStatus();
+    renderFiles(status);
+    setInterval(refreshStatus, 1000);
+  })();
+</script>

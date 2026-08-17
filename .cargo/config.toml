@@ -1,0 +1,10 @@
+# Alpine's musl targets default to a fully static binary, but Alpine only
+# ships libasound (ALSA) as a shared library, not a static .a - so a fully
+# static build fails to link. Dynamically link instead: musl libc and
+# libasound both come from the system at runtime (via `apk add alsa-lib`),
+# same as every other apk-installed program on Alpine.
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=-crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=-crt-static"]
