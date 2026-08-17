@@ -1,24 +1,24 @@
 #!/bin/sh
 # Run this on the Wyse 3040 itself, as root:
 #
-#   curl -fsSL https://raw.githubusercontent.com/jdoe/audio-player/main/deploy/install.sh | sh
+#   wget -qO- https://raw.githubusercontent.com/siammridha/audio_player/main/deploy/install.sh | sh
 #
 # Downloads the latest release binary from GitHub, installs it as an OpenRC
 # boot service, and starts it. No other files need to be copied to the
 # device first.
 set -eu
 
-REPO="jdoe/audio-player" # change this to your GitHub owner/repo
+REPO="siammridha/audio_player"
 
 if [ "$(id -u)" -ne 0 ]; then
 	echo "Run this as root." >&2
 	exit 1
 fi
 
-apk add --no-cache alsa-lib curl jq
+apk add --no-cache alsa-lib jq
 
 echo "Looking up the latest release of $REPO..."
-DOWNLOAD_URL=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+DOWNLOAD_URL=$(wget -qO- "https://api.github.com/repos/$REPO/releases/latest" \
 	| jq -r '.assets[] | select(.name == "audio-player") | .browser_download_url')
 
 if [ -z "$DOWNLOAD_URL" ]; then
@@ -27,7 +27,7 @@ if [ -z "$DOWNLOAD_URL" ]; then
 fi
 
 echo "Downloading $DOWNLOAD_URL..."
-curl -fsSL -o /usr/local/bin/audio-player "$DOWNLOAD_URL"
+wget -qO /usr/local/bin/audio-player "$DOWNLOAD_URL"
 chmod 755 /usr/local/bin/audio-player
 
 cat > /etc/init.d/audio-player <<'EOF'

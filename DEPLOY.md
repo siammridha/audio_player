@@ -19,13 +19,8 @@ Wyse 3040 exactly (x86_64 Alpine) - no cross-compiling.
 Run this on the Wyse 3040 itself, as root:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/deploy/install.sh | sh
+wget -qO- https://raw.githubusercontent.com/siammridha/audio_player/main/deploy/install.sh | sh
 ```
-
-(Replace `<owner>/<repo>` with the actual GitHub repo, and make sure the
-`REPO` line near the top of `deploy/install.sh` in the repo is also set to
-that same `<owner>/<repo>` - that's what tells the script where to download
-the binary from.)
 
 This installs ALSA, downloads the latest release binary, sets up the OpenRC
 service, sets it to start on every boot, and starts it right away. Nothing
@@ -57,4 +52,4 @@ http://<device-ip>:3000
 web page afterwards to see the updated list.
 
 **Update the program:** push a new version tag, then re-run the same
-`curl ... | sh` command on the device - it always grabs the latest release.
+`wget ... | sh` command on the device - it always grabs the latest release.
