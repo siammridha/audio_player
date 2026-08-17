@@ -1,11 +1,10 @@
 use std::fs::File;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioSink};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioSink, Source};
 
 use super::{Player, PlayerStatus};
 
@@ -13,6 +12,7 @@ use super::{Player, PlayerStatus};
 struct Track {
     path: PathBuf,
     display_name: String,
+    duration: Option<Duration>,
 }
 
 struct Inner {
@@ -51,19 +51,20 @@ impl RodioPlayer {
     }
 
     /// Replaces whatever is queued with `path`, decoded from scratch, and
-    /// starts it playing. Returns false (leaving the old track queued) if
-    /// the file can't be opened or decoded.
-    fn load(&self, path: &Path) -> bool {
-        let Ok(file) = File::open(path) else {
-            return false;
-        };
-        let Ok(source) = Decoder::try_from(BufReader::new(file)) else {
-            return false;
-        };
+    /// starts it playing. Returns `None` (leaving the old track queued) if
+    /// the file can't be opened or decoded, otherwise the track's length if
+    /// it could be determined.
+    fn load(&self, path: &Path) -> Option<Option<Duration>> {
+        let file = File::open(path).ok()?;
+        // `Decoder::try_from(File)` (rather than wrapping it in a `BufReader`
+        // ourselves) sets the byte length, which is what lets `total_duration`
+        // work for formats like mp3 that don't carry timing info directly.
+        let source = Decoder::try_from(file).ok()?;
+        let duration = source.total_duration();
         self.sink.clear();
         self.sink.append(source);
         self.sink.play();
-        true
+        Some(duration)
     }
 
     /// Runs for the life of the process: notices when a track has finished
@@ -79,7 +80,7 @@ impl RodioPlayer {
                 continue;
             };
             drop(inner);
-            self.load(&track.path);
+            let _ = self.load(&track.path);
         }
     }
 }
@@ -87,10 +88,11 @@ impl RodioPlayer {
 impl Player for RodioPlayer {
     fn select(&self, path: &Path, display_name: &str) {
         let mut inner = self.inner.lock().unwrap();
-        if self.load(path) {
+        if let Some(duration) = self.load(path) {
             inner.track = Some(Track {
                 path: path.to_path_buf(),
                 display_name: display_name.to_string(),
+                duration,
             });
         }
     }
@@ -103,7 +105,7 @@ impl Player for RodioPlayer {
         if self.sink.empty() {
             // The track finished on its own - "play" means start it over.
             drop(inner);
-            self.load(&track.path);
+            let _ = self.load(&track.path);
         } else if self.sink.is_paused() {
             self.sink.play();
         } else {
@@ -115,7 +117,7 @@ impl Player for RodioPlayer {
         let inner = self.inner.lock().unwrap();
         if let Some(track) = inner.track.clone() {
             drop(inner);
-            self.load(&track.path);
+            let _ = self.load(&track.path);
         }
     }
 
@@ -126,10 +128,22 @@ impl Player for RodioPlayer {
     fn status(&self) -> PlayerStatus {
         let inner = self.inner.lock().unwrap();
         let playing = inner.track.is_some() && !self.sink.empty() && !self.sink.is_paused();
+        let position = if inner.track.is_some() {
+            self.sink.get_pos().as_secs_f64()
+        } else {
+            0.0
+        };
+        let duration = inner
+            .track
+            .as_ref()
+            .and_then(|t| t.duration)
+            .map(|d| d.as_secs_f64());
         PlayerStatus {
             file: inner.track.as_ref().map(|t| t.display_name.clone()),
             playing,
             looping: inner.looping,
+            position,
+            duration,
         }
     }
 }

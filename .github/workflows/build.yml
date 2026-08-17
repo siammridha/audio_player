@@ -2,7 +2,12 @@ name: build
 
 on:
   push:
+    tags:
+      - "v*"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -20,7 +25,7 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - uses: actions/upload-artifact@v4
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
         with:
-          name: audio-player-x86_64-alpine
-          path: target/release/audio-player
+          files: target/release/audio-player

@@ -14,9 +14,11 @@ the remote control: pick a file, play/pause, loop, start over.
 - `src/http.rs` - the web page and a small JSON API (`/api/files`,
   `/api/status`, `/api/play`, `/api/toggle`, `/api/restart`, `/api/loop`).
 - `assets/index.html` - the whole UI: one file, inline CSS/JS, no build step.
-- `deploy/audio-player.initd` - an OpenRC service so it starts on boot.
-- `.github/workflows/build.yml` - builds the release binary on a native
-  x86_64 Alpine container, so it matches the Wyse 3040 exactly.
+- `deploy/install.sh` - run on the device; downloads the latest release
+  binary from GitHub and sets it up as an OpenRC service that starts on boot.
+- `.github/workflows/build.yml` - on a pushed version tag, builds the release
+  binary on a native x86_64 Alpine container (matching the Wyse 3040 exactly)
+  and publishes it as a GitHub Release.
 
 See [DEPLOY.md](DEPLOY.md) for how to get it running on the device.
 

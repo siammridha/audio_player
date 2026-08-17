@@ -9,6 +9,10 @@ pub struct PlayerStatus {
     pub playing: bool,
     #[serde(rename = "loop")]
     pub looping: bool,
+    /// Seconds into the current track. 0 if nothing is loaded.
+    pub position: f64,
+    /// Total length of the current track in seconds, if known.
+    pub duration: Option<f64>,
 }
 
 /// A single audio output. All methods act on "the currently loaded track" and

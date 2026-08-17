@@ -1,44 +1,38 @@
 # Getting this running on the Wyse 3040
 
-## 1. Get the binary built
+## 1. Build a release
 
 The binary is built by GitHub Actions, in a container that matches the
 Wyse 3040 exactly (x86_64 Alpine) - no cross-compiling.
 
 1. Push this repo to GitHub, with Actions enabled.
-2. Open the repo's **Actions** tab, wait for the `build` workflow to finish
-   (or run it by hand with **Run workflow** if it didn't trigger).
-3. Open the finished run and download the `audio-player-x86_64-alpine`
-   artifact. It's a zip containing one file: `audio-player`.
-4. Copy that `audio-player` file to the Wyse 3040, e.g.:
+2. Push a version tag, e.g.:
    ```sh
-   scp audio-player root@<device-ip>:/tmp/audio-player
+   git tag v1.0.0
+   git push origin v1.0.0
    ```
+   This runs the `build` workflow and publishes a GitHub Release with the
+   `audio-player` binary attached.
 
-## 2. Set it up on the device
+## 2. Install it on the device
 
-Run these on the Wyse 3040 itself (as root):
-
-```sh
-# Runtime dependency: the program links against ALSA at runtime.
-apk add alsa-lib
-
-# Install the binary.
-install -m 755 /tmp/audio-player /usr/local/bin/audio-player
-
-# Folder the player scans for audio files (.mp3, .wav, .flac, .ogg).
-mkdir -p /var/lib/audio-player/audio
-# Now copy your audio files into /var/lib/audio-player/audio, e.g. with scp.
-```
-
-Get the OpenRC service file onto the device (e.g. `scp deploy/audio-player.initd
-root@<device-ip>:/tmp/`), then:
+Run this on the Wyse 3040 itself, as root:
 
 ```sh
-install -m 755 /tmp/audio-player.initd /etc/init.d/audio-player
-rc-update add audio-player default   # start on every boot
-rc-service audio-player start
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/deploy/install.sh | sh
 ```
+
+(Replace `<owner>/<repo>` with the actual GitHub repo, and make sure the
+`REPO` line near the top of `deploy/install.sh` in the repo is also set to
+that same `<owner>/<repo>` - that's what tells the script where to download
+the binary from.)
+
+This installs ALSA, downloads the latest release binary, sets up the OpenRC
+service, sets it to start on every boot, and starts it right away. Nothing
+else needs to be copied to the device first.
+
+Then copy your audio files into `/var/lib/audio-player/audio` (e.g. with
+`scp`). Files are scanned live, so no restart is needed after adding songs.
 
 Check it's running:
 
@@ -62,11 +56,5 @@ http://<device-ip>:3000
 `/var/lib/audio-player/audio` on the device (e.g. with `scp`). Reload the
 web page afterwards to see the updated list.
 
-**Update the program:** download a fresh artifact from a new Actions run,
-then on the device:
-
-```sh
-rc-service audio-player stop
-install -m 755 /tmp/audio-player /usr/local/bin/audio-player
-rc-service audio-player start
-```
+**Update the program:** push a new version tag, then re-run the same
+`curl ... | sh` command on the device - it always grabs the latest release.

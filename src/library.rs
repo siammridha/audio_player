@@ -1,11 +1,20 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use rodio::{Decoder, Source};
+
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "wav", "flac", "ogg"];
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct FileEntry {
+    pub name: String,
+    /// Length of the track in seconds, if it could be read from the file.
+    pub duration: Option<f64>,
+}
+
 /// Makes sure the music folder exists, then lists the audio files in it
-/// (top-level only), sorted by name.
-pub fn list_files(dir: &Path) -> Vec<String> {
+/// (top-level only), sorted by name, along with each one's length.
+pub fn list_files(dir: &Path) -> Vec<FileEntry> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -19,6 +28,19 @@ pub fn list_files(dir: &Path) -> Vec<String> {
 
     names.sort();
     names
+        .into_iter()
+        .map(|name| {
+            let duration = probe_duration(&dir.join(&name));
+            FileEntry { name, duration }
+        })
+        .collect()
+}
+
+/// Reads just enough of a file to find its length, without playing it.
+pub fn probe_duration(path: &Path) -> Option<f64> {
+    let file = std::fs::File::open(path).ok()?;
+    let source = Decoder::try_from(file).ok()?;
+    source.total_duration().map(|d| d.as_secs_f64())
 }
 
 pub fn resolve(dir: &Path, name: &str) -> Option<PathBuf> {

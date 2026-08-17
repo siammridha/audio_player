@@ -68,7 +68,7 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
 
         ("GET", "/api/files") => {
             let files = library::list_files(&state.music_dir);
-            Response::json(200, json!(files))
+            Response::json(200, serde_json::to_value(files).unwrap())
         }
 
         ("GET", "/api/status") => status_response(state),
@@ -147,7 +147,21 @@ mod tests {
     fn lists_only_audio_files() {
         let (state, _dir) = test_state();
         let resp = handle(&state, "GET", "/api/files", b"");
-        assert_eq!(json_body(&resp), json!(["song.mp3"]));
+        // The fixture file isn't real audio, so its duration can't be read.
+        assert_eq!(
+            json_body(&resp),
+            json!([{ "name": "song.mp3", "duration": null }])
+        );
+    }
+
+    #[test]
+    fn status_includes_position_and_duration() {
+        let (state, _dir) = test_state();
+        handle(&state, "POST", "/api/play", br#"{"file":"song.mp3"}"#);
+        let resp = handle(&state, "GET", "/api/status", b"");
+        let body = json_body(&resp);
+        assert!(body["position"].is_number());
+        assert!(body["duration"].is_null() || body["duration"].is_number());
     }
 
     #[test]
