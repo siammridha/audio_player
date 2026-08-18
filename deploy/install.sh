@@ -27,8 +27,14 @@ if [ -z "$DOWNLOAD_URL" ]; then
 fi
 
 echo "Downloading $DOWNLOAD_URL..."
-wget -qO /usr/local/bin/audio-player "$DOWNLOAD_URL"
-chmod 755 /usr/local/bin/audio-player
+# Download to a temp file and rename it into place, rather than overwriting
+# /usr/local/bin/audio-player directly: if the service is already running
+# from a previous install, writing straight to that path fails with "Text
+# file busy". A rename works because it swaps the directory entry instead
+# of touching the file the running process has open.
+wget -qO /usr/local/bin/audio-player.new "$DOWNLOAD_URL"
+chmod 755 /usr/local/bin/audio-player.new
+mv /usr/local/bin/audio-player.new /usr/local/bin/audio-player
 
 # The Wyse 3040's headphone jack (rt5670 codec) boots with its internal
 # output routing switched off - nothing plays until these are turned on.
