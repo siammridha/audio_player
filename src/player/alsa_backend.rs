@@ -11,7 +11,10 @@ use rodio::{Decoder, Source};
 
 use super::{Player, PlayerStatus};
 
-const DEVICE: &str = "default";
+/// `plughw`, not `hw`/`default`: this chip's clock only actually runs at
+/// 48kHz, so anything else (most mp3s are 44.1kHz) needs ALSA's software
+/// rate conversion, which raw `hw:0,0` doesn't do.
+const DEVICE: &str = "plughw:0,0";
 const CHUNK_FRAMES: usize = 4096;
 
 type BoxedSource = Box<dyn Source<Item = f32> + Send>;
