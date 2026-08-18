@@ -19,12 +19,16 @@ Wyse 3040 exactly (x86_64 Alpine) - no cross-compiling.
 Run this on the Wyse 3040 itself, as root:
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/siammridha/audio_player/main/deploy/install.sh | sh
+wget -qO- https://raw.githubusercontent.com/siammridha/audio_player/master/deploy/install.sh | sh
 ```
 
 This installs ALSA, downloads the latest release binary, sets up the OpenRC
 service, sets it to start on every boot, and starts it right away. Nothing
 else needs to be copied to the device first.
+
+**On the first install on a given device, reboot once afterwards** (`reboot`)
+so the sound chip's firmware loads. Without this, the device falls back to
+HDMI-only audio and the headphone jack stays silent.
 
 Then copy your audio files into `/var/lib/audio-player/audio` (e.g. with
 `scp`). Files are scanned live, so no restart is needed after adding songs.

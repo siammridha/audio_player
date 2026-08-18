@@ -1,7 +1,7 @@
 #!/bin/sh
 # Run this on the Wyse 3040 itself, as root:
 #
-#   wget -qO- https://raw.githubusercontent.com/siammridha/audio_player/main/deploy/install.sh | sh
+#   wget -qO- https://raw.githubusercontent.com/siammridha/audio_player/master/deploy/install.sh | sh
 #
 # Downloads the latest release binary from GitHub, installs it as an OpenRC
 # boot service, and starts it. No other files need to be copied to the
@@ -15,7 +15,7 @@ if [ "$(id -u)" -ne 0 ]; then
 	exit 1
 fi
 
-apk add --no-cache alsa-lib jq
+apk add --no-cache alsa-lib libgcc jq sof-firmware alsa-utils
 
 echo "Looking up the latest release of $REPO..."
 DOWNLOAD_URL=$(wget -qO- "https://api.github.com/repos/$REPO/releases/latest" \
@@ -29,6 +29,20 @@ fi
 echo "Downloading $DOWNLOAD_URL..."
 wget -qO /usr/local/bin/audio-player "$DOWNLOAD_URL"
 chmod 755 /usr/local/bin/audio-player
+
+# The Wyse 3040's headphone jack (rt5670 codec) boots with its internal
+# output routing switched off - nothing plays until these are turned on.
+# This has to happen on every boot, so it's saved and restored by the
+# service below rather than just set once here.
+echo "Enabling headphone output routing..."
+amixer sset "DAC1 MIXL DAC1" on >/dev/null 2>&1 || true
+amixer sset "DAC1 MIXR DAC1" on >/dev/null 2>&1 || true
+amixer sset "HPOVOL MIXL DAC1" on >/dev/null 2>&1 || true
+amixer sset "HPOVOL MIXR DAC1" on >/dev/null 2>&1 || true
+amixer sset "HPO MIX DAC1" on >/dev/null 2>&1 || true
+amixer sset "HPO MIX HPVOL" on >/dev/null 2>&1 || true
+amixer sset HP 100% >/dev/null 2>&1 || true
+alsactl store 2>/dev/null || true
 
 cat > /etc/init.d/audio-player <<'EOF'
 #!/sbin/openrc-run
@@ -49,6 +63,10 @@ export PORT MUSIC_DIR
 depend() {
 	need net
 }
+
+start_pre() {
+	alsactl restore 2>/dev/null || true
+}
 EOF
 chmod 755 /etc/init.d/audio-player
 
@@ -59,3 +77,7 @@ rc-service audio-player restart
 
 echo "audio-player installed and running. Status:"
 rc-service audio-player status
+
+echo
+echo "If this is the first install on this device, reboot now so the sound"
+echo "chip's firmware loads: reboot"
