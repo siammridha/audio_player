@@ -1,7 +1,7 @@
 use std::path::Path;
 
+pub mod alsa_backend;
 pub mod mock_backend;
-pub mod rodio_backend;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct PlayerStatus {

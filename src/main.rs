@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use player::Player;
+use player::alsa_backend::AlsaPlayer;
 use player::mock_backend::MockPlayer;
-use player::rodio_backend::RodioPlayer;
 use tiny_http::Server;
 
 const INDEX_HTML: &str = include_str!("../assets/index.html");
@@ -28,7 +28,7 @@ fn main() -> anyhow::Result<()> {
     let player: Arc<dyn Player> = if use_mock {
         Arc::new(MockPlayer::new())
     } else {
-        RodioPlayer::new()?
+        AlsaPlayer::new()?
     };
 
     let state = Arc::new(http::AppState {

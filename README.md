@@ -8,8 +8,11 @@ the remote control: pick a file, play/pause, loop, start over.
 ## How it's built
 
 - `src/player/` - a `Player` trait with two implementations:
-  - `rodio_backend.rs` - real playback via [rodio](https://docs.rs/rodio),
-    used on the actual device.
+  - `alsa_backend.rs` - real playback, used on the actual device: decodes
+    files with [rodio](https://docs.rs/rodio)'s decoder, then writes the
+    audio straight to ALSA via the [alsa](https://docs.rs/alsa) crate
+    (rather than through rodio's own output/`cpal` layer, which has a bug
+    on this device's sound driver that silently drops audio).
   - `mock_backend.rs` - in-memory only, no sound card needed. Used by tests.
 - `src/http.rs` - the web page and a small JSON API (`/api/files`,
   `/api/status`, `/api/play`, `/api/toggle`, `/api/restart`, `/api/loop`).
@@ -24,7 +27,7 @@ See [DEPLOY.md](DEPLOY.md) for how to get it running on the device.
 
 ## Development
 
-This dev container is arm64 and has no sound card, so the real (`rodio`)
+This dev container is arm64 and has no sound card, so the real (ALSA)
 backend can't be run or tested here - only the mock backend can. That's
 enough to develop and test the web page and API.
 

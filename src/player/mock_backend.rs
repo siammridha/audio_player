@@ -16,7 +16,7 @@ struct State {
     running_since: Option<Instant>,
 }
 
-/// In-memory stand-in for `RodioPlayer`, used wherever there's no sound card
+/// In-memory stand-in for `AlsaPlayer`, used wherever there's no sound card
 /// to talk to: unit tests, and the browser e2e test. Position advances with
 /// the wall clock instead of real playback.
 pub struct MockPlayer {
