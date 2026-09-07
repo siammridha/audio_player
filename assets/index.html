@@ -106,31 +106,33 @@
 
   #volume { position: relative; display: flex; align-items: center; gap: 0.85rem; margin: 0 0 1.75rem; color: var(--muted); }
   #volume svg { width: 25px; height: 25px; }
-  #volume-badge {
-    position: absolute;
-    top: -2.35rem;
-    transform: translateX(-50%);
-    background: var(--orange);
-    color: #241400;
-    font-size: 0.75rem;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-    padding: 0.25rem 0.55rem;
-    border-radius: 6px;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s ease;
-  }
-  #volume-badge.visible { opacity: 1; }
-  #volume-badge::after {
-    content: "";
-    position: absolute;
-    top: 100%;
+  #volume-hud {
+    position: fixed;
+    top: 50%;
     left: 50%;
-    transform: translateX(-50%);
-    border: 5px solid transparent;
-    border-top-color: var(--orange);
+    width: 8.5rem;
+    height: 8.5rem;
+    margin: -4.25rem 0 0 -4.25rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.9rem;
+    background: rgba(30, 30, 30, 0.82);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 22px;
+    opacity: 0;
+    transform: scale(0.92);
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    z-index: 1000;
   }
+  #volume-hud.visible { opacity: 1; transform: scale(1); }
+  #volume-hud svg { width: 34px; height: 34px; color: #f5efe6; }
+  #volume-hud-bar { width: 5.5rem; height: 5px; border-radius: 2.5px; background: rgba(255, 255, 255, 0.25); overflow: hidden; }
+  #volume-hud-fill { height: 100%; width: 0%; background: #f5efe6; border-radius: 2.5px; }
+  #volume-hud-pct { color: #f5efe6; font-size: 0.75rem; font-weight: 600; font-variant-numeric: tabular-nums; }
   #volume-slider {
     flex: 1;
     -webkit-appearance: none;
@@ -288,11 +290,16 @@
   <div id="volume">
     <span id="volume-icon"></span>
     <input type="range" id="volume-slider" min="0" max="100" value="100" />
-    <span id="volume-badge">100%</span>
   </div>
 
   <ul id="files"></ul>
 </main>
+
+<div id="volume-hud">
+  <span id="volume-hud-icon"></span>
+  <div id="volume-hud-bar"><div id="volume-hud-fill"></div></div>
+  <span id="volume-hud-pct"></span>
+</div>
 
 <script>
   const ICONS = {
@@ -326,7 +333,10 @@
   const volumeEl = document.getElementById("volume");
   const volumeIconEl = document.getElementById("volume-icon");
   const volumeSliderEl = document.getElementById("volume-slider");
-  const volumeBadgeEl = document.getElementById("volume-badge");
+  const volumeHudEl = document.getElementById("volume-hud");
+  const volumeHudIconEl = document.getElementById("volume-hud-icon");
+  const volumeHudFillEl = document.getElementById("volume-hud-fill");
+  const volumeHudPctEl = document.getElementById("volume-hud-pct");
 
   restartEl.innerHTML = ICONS.restart + "<span>Start Over</span>";
   loopEl.innerHTML = ICONS.loop + "<span>Loop</span>";
@@ -467,33 +477,25 @@
     volumeIconEl.innerHTML = volumeIconFor(pct);
   }
 
-  function positionVolumeBadge() {
-    const sliderRect = volumeSliderEl.getBoundingClientRect();
-    const containerRect = volumeEl.getBoundingClientRect();
-    const pct = Number(volumeSliderEl.value) / 100;
-    const thumbSize = 26;
-    const thumbX = pct * (sliderRect.width - thumbSize) + thumbSize / 2;
-    volumeBadgeEl.style.left = `${sliderRect.left - containerRect.left + thumbX}px`;
+  let volumeHudHideTimer = null;
+
+  function showVolumeHud() {
+    const pct = Number(volumeSliderEl.value);
+    volumeHudIconEl.innerHTML = volumeIconFor(pct);
+    volumeHudFillEl.style.width = `${pct}%`;
+    volumeHudPctEl.textContent = `${pct}%`;
+    volumeHudEl.classList.add("visible");
+    clearTimeout(volumeHudHideTimer);
+    volumeHudHideTimer = setTimeout(() => {
+      volumeHudEl.classList.remove("visible");
+    }, 1100);
   }
 
-  function showVolumeBadge() {
-    volumeBadgeEl.textContent = `${volumeSliderEl.value}%`;
-    positionVolumeBadge();
-    volumeBadgeEl.classList.add("visible");
-  }
-
-  function hideVolumeBadge() {
-    volumeBadgeEl.classList.remove("visible");
-  }
-
-  volumeSliderEl.addEventListener("pointerdown", showVolumeBadge);
-  volumeSliderEl.addEventListener("pointerup", hideVolumeBadge);
-  volumeSliderEl.addEventListener("pointercancel", hideVolumeBadge);
+  volumeSliderEl.addEventListener("pointerdown", showVolumeHud);
 
   volumeSliderEl.addEventListener("input", () => {
     syncVolumeVisual();
-    volumeBadgeEl.textContent = `${volumeSliderEl.value}%`;
-    positionVolumeBadge();
+    showVolumeHud();
   });
 
   volumeSliderEl.addEventListener("change", () => {

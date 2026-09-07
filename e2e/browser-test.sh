@@ -88,22 +88,22 @@ volume_icon_muted=$(browser eval "document.getElementById('volume-icon').innerHT
 echo "$volume_icon_muted" | grep -q 'M16 9l5 6' && echo "ok: volume icon shows the muted glyph at 0%" || { echo "FAIL: volume icon did not switch to the muted glyph"; exit 1; }
 
 browser eval "document.getElementById('volume-slider').dispatchEvent(new Event('pointerdown'))" >/dev/null
-badge_visible=$(browser eval "document.getElementById('volume-badge').classList.contains('visible')")
-assert_eq "percentage badge appears while sliding" "true" "$badge_visible"
+hud_visible=$(browser eval "document.getElementById('volume-hud').classList.contains('visible')")
+assert_eq "volume overlay appears while sliding" "true" "$hud_visible"
 
 browser eval "(() => { const el = document.getElementById('volume-slider'); el.value = 42; el.dispatchEvent(new Event('input')); })()" >/dev/null
-badge_text=$(browser eval "document.getElementById('volume-badge').textContent")
-assert_eq "percentage badge shows the live value while sliding" '"42%"' "$badge_text"
+hud_fill_width=$(browser eval "document.getElementById('volume-hud-fill').style.width")
+assert_eq "volume overlay bar fills to match the live value while sliding" '"42%"' "$hud_fill_width"
 
 sleep 1.3
 volume_before_release=$(browser eval "document.getElementById('volume-slider').value")
 assert_eq "sliding without releasing does not push volume to the server" '"42"' "$volume_before_release"
 
 browser eval "(() => { const el = document.getElementById('volume-slider'); el.dispatchEvent(new Event('pointerup')); el.dispatchEvent(new Event('change')); })()" >/dev/null
-badge_hidden=$(browser eval "document.getElementById('volume-badge').classList.contains('visible')")
-assert_eq "percentage badge disappears once the slider is released" "false" "$badge_hidden"
-
 sleep 1.3
+hud_hidden=$(browser eval "document.getElementById('volume-hud').classList.contains('visible')")
+assert_eq "volume overlay fades out after sliding stops" "false" "$hud_hidden"
+
 volume_after_release=$(browser eval "document.getElementById('volume-slider').value")
 assert_eq "releasing the slider round-trips the volume through the server" '"42"' "$volume_after_release"
 
