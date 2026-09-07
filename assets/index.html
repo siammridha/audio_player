@@ -64,7 +64,7 @@
   #progress { display: flex; align-items: center; gap: 0.6rem; margin: 0 0 1.75rem; }
   #progress-bar { flex: 1; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
   #progress-fill { height: 100%; width: 0%; background: var(--orange); border-radius: 2px; }
-  #time { color: var(--muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .time { color: var(--muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
   .controls { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-bottom: 1.75rem; }
   .controls button {
@@ -98,7 +98,7 @@
   #play-pause:disabled { background: var(--orange-dim); color: #1a1a1a; }
 
   #volume { display: flex; align-items: center; gap: 0.85rem; margin: 0 0 1.75rem; color: var(--muted); }
-  #volume svg { width: 24px; height: 24px; }
+  #volume svg { width: 25px; height: 25px; }
   #volume-slider {
     flex: 1;
     -webkit-appearance: none;
@@ -205,8 +205,9 @@
   <p id="now-playing-caption">Now Playing</p>
 
   <div id="progress">
+    <span id="time-current" class="time">0:00</span>
     <div id="progress-bar"><div id="progress-fill"></div></div>
-    <span id="time">0:00</span>
+    <span id="time-total" class="time">0:00</span>
   </div>
 
   <div class="controls">
@@ -245,7 +246,8 @@
   const nowPlayingCaptionEl = document.getElementById("now-playing-caption");
   const progressEl = document.getElementById("progress");
   const progressFillEl = document.getElementById("progress-fill");
-  const timeEl = document.getElementById("time");
+  const timeCurrentEl = document.getElementById("time-current");
+  const timeTotalEl = document.getElementById("time-total");
   const playPauseEl = document.getElementById("play-pause");
   const restartEl = document.getElementById("restart");
   const loopEl = document.getElementById("loop");
@@ -315,14 +317,13 @@
     }
 
     if (status.file) {
-      timeEl.textContent =
-        status.duration != null
-          ? `${formatTime(status.position)} / ${formatTime(status.duration)}`
-          : formatTime(status.position);
+      timeCurrentEl.textContent = formatTime(status.position);
+      timeTotalEl.textContent = status.duration != null ? formatTime(status.duration) : "0:00";
       const pct = status.duration ? Math.min(100, (status.position / status.duration) * 100) : 0;
       progressFillEl.style.width = `${pct}%`;
     } else {
-      timeEl.textContent = "0:00";
+      timeCurrentEl.textContent = "0:00";
+      timeTotalEl.textContent = "0:00";
       progressFillEl.style.width = "0%";
     }
 
