@@ -31,15 +31,15 @@
     -webkit-user-select: none;
     user-select: none;
   }
-  #app {
+  main {
+    width: 100%;
+    max-width: 26rem;
+    margin: 0 auto;
     min-height: 100vh;
-    display: flex;
-    justify-content: center;
     padding: max(2rem, env(safe-area-inset-top)) 1.25rem max(2rem, env(safe-area-inset-bottom));
     background: linear-gradient(180deg, var(--bg1), var(--bg2) 55%);
   }
-  main { width: 100%; max-width: 26rem; }
-  #app.pull-settling { transition: transform 0.4s cubic-bezier(0.33, 1, 0.68, 1); }
+  main.pull-settling { transition: transform 0.4s cubic-bezier(0.33, 1, 0.68, 1); }
   h1 {
     text-align: center;
     font-size: 0.85rem;
@@ -262,7 +262,6 @@
   </div>
 </div>
 
-<div id="app">
 <main>
   <h1>Ruqyah</h1>
   <p id="output-device"></p>
@@ -294,7 +293,6 @@
 
   <ul id="files"></ul>
 </main>
-</div>
 
 <script>
   const ICONS = {
@@ -530,7 +528,7 @@
     const pullIndicatorEl = document.getElementById("pull-indicator");
     const pullSpinnerEl = document.getElementById("pull-spinner");
     const tickEls = pullSpinnerEl.querySelectorAll("i");
-    const appEl = document.getElementById("app");
+    const mainEl = document.querySelector("main");
 
     // iOS scroll views resist overscroll from the very first pixel, and
     // that resistance grows the further you pull - the same drag of the
@@ -553,7 +551,7 @@
 
     function setSettling(on) {
       pullIndicatorEl.classList.toggle("settling", on);
-      appEl.classList.toggle("pull-settling", on);
+      mainEl.classList.toggle("pull-settling", on);
     }
 
     function startSpinning() {
@@ -564,7 +562,7 @@
       pullProgress = 0;
       pullIndicatorEl.style.opacity = "0";
       pullIndicatorEl.style.transform = "translate(-50%, 0px)";
-      appEl.style.transform = "";
+      mainEl.style.transform = "";
       pullSpinnerEl.classList.remove("spinning");
       tickEls.forEach((tick) => (tick.style.opacity = "0"));
     }
@@ -597,7 +595,7 @@
         // keeps stretching down with the extra drag.
         pullIndicatorEl.style.opacity = String(Math.min(pullProgress * 1.3, 1));
         pullIndicatorEl.style.transform = `translate(-50%, ${pullProgress * ICON_REST_Y}px)`;
-        appEl.style.transform = `translateY(${distance}px)`;
+        mainEl.style.transform = `translateY(${distance}px)`;
 
         // Once every petal has landed, start the loading spin right away
         // instead of waiting for the finger to lift.
@@ -620,7 +618,7 @@
       if (pullProgress >= 1) {
         pullIndicatorEl.style.opacity = "1";
         pullIndicatorEl.style.transform = `translate(-50%, ${ICON_REST_Y}px)`;
-        appEl.style.transform = "";
+        mainEl.style.transform = "";
         if (!pullSpinnerEl.classList.contains("spinning")) startSpinning();
         // Let the snap-into-place animation finish before the page
         // actually reloads, so the release doesn't get cut short.
