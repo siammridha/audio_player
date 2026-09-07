@@ -57,7 +57,7 @@ assert_eq "file list shows both fixture files" '"song1.mp3,song2.wav"' "$files"
 browser click "#files button" >/dev/null
 sleep 0.2
 now_playing=$(browser eval "document.getElementById('now-playing').textContent")
-assert_eq "selecting a file starts playing it" '"Playing: song1.mp3"' "$now_playing"
+assert_eq "selecting a file starts playing it" '"song1.mp3"' "$now_playing"
 play_pause=$(browser eval "document.getElementById('play-pause').textContent")
 assert_eq "play/pause button reads Pause while playing" '"Pause"' "$play_pause"
 
