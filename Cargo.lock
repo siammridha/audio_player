@@ -49,6 +49,7 @@ version = "0.1.0"
 dependencies = [
  "alsa",
  "anyhow",
+ "libc",
  "rodio",
  "serde",
  "serde_json",

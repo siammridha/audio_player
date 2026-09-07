@@ -9,17 +9,30 @@ use alsa::pcm::{Access, Format, HwParams, PCM};
 use alsa::{Direction, ValueOr};
 use rodio::{Decoder, Source};
 
-use super::{Player, PlayerStatus};
+use super::{Player, PlayerStatus, device_watch};
 
-/// Default ALSA device: the USB sound card, addressed by its ALSA card name
-/// ("Device", visible in `aplay -l`) rather than a card number, since the
-/// number can shift depending on what else is plugged in. Override with the
-/// `AUDIO_DEVICE` env var.
+/// Default ALSA device: the external USB sound card the player is meant to
+/// play through, addressed by its ALSA card name ("Device", visible in
+/// `aplay -l`) rather than a card number, since the number can shift
+/// depending on what else is plugged in. Override with the `AUDIO_DEVICE`
+/// env var.
 ///
 /// `plughw`, not `hw`/`default`: only using `plughw` gets ALSA's software
 /// rate conversion, needed for files whose sample rate doesn't match what
 /// the card runs at natively.
 pub const DEFAULT_DEVICE: &str = "plughw:CARD=Device,DEV=0";
+
+/// The USB card's ALSA short name (the same "Device" baked into
+/// `DEFAULT_DEVICE`), used to watch for it appearing/disappearing. Not
+/// read from `AUDIO_DEVICE` at runtime, since that env var can be
+/// overridden to something else entirely.
+pub const PRIMARY_CARD_NAME: &str = "Device";
+
+/// Fallback ALSA device, used whenever the USB card isn't present: the Wyse
+/// 3040's own built-in sound chip, which is always there once its firmware
+/// has loaded. Override with the `AUDIO_DEVICE_FALLBACK` env var.
+pub const DEFAULT_FALLBACK_DEVICE: &str = "plughw:CARD=rt5672,DEV=0";
+
 const CHUNK_FRAMES: usize = 4096;
 
 type BoxedSource = Box<dyn Source<Item = f32> + Send>;
@@ -41,6 +54,8 @@ struct Inner {
 enum Command {
     Play(PathBuf, BoxedSource),
     TogglePlayPause,
+    /// A confirmed flip in the USB card's presence, from `device_watch`.
+    DevicePresence(bool),
 }
 
 /// Playback progress, written only by the feeder thread and read by
@@ -72,11 +87,21 @@ pub struct AlsaPlayer {
 }
 
 impl AlsaPlayer {
-    /// Opens `device` for playback and starts the background feeder thread
-    /// that owns it for the life of the process.
-    pub fn new(device: &str) -> anyhow::Result<Arc<Self>> {
-        let pcm = PCM::new(device, Direction::Playback, false)
-            .map_err(|e| anyhow::anyhow!("failed to open ALSA device {device:?}: {e}"))?;
+    /// Opens `fallback_device` for playback right away (this has to
+    /// succeed - it's the Wyse 3040's own sound chip, expected to always be
+    /// there) and starts the background feeder thread that owns the active
+    /// PCM handle for the life of the process. Also starts watching
+    /// `primary_card_name` for hotplug; the feeder switches over to
+    /// `primary_device` once that card is confirmed present, and back to
+    /// `fallback_device` if it's later removed.
+    pub fn new(
+        primary_device: &str,
+        fallback_device: &str,
+        primary_card_name: &'static str,
+    ) -> anyhow::Result<Arc<Self>> {
+        let pcm = PCM::new(fallback_device, Direction::Playback, false).map_err(|e| {
+            anyhow::anyhow!("failed to open ALSA fallback device {fallback_device:?}: {e}")
+        })?;
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let playback = Arc::new(PlaybackState::default());
@@ -90,7 +115,24 @@ impl AlsaPlayer {
 
         let feeder_playback = Arc::clone(&playback);
         let feeder_inner = Arc::clone(&inner);
-        thread::spawn(move || feeder_loop(pcm, cmd_rx, feeder_playback, feeder_inner));
+        let primary_device = primary_device.to_string();
+        let fallback_device = fallback_device.to_string();
+        thread::spawn(move || {
+            feeder_loop(
+                pcm,
+                primary_device,
+                fallback_device,
+                primary_card_name,
+                cmd_rx,
+                feeder_playback,
+                feeder_inner,
+            )
+        });
+
+        let watch_tx = cmd_tx.clone();
+        device_watch::watch(primary_card_name, move |present| {
+            let _ = watch_tx.send(Command::DevicePresence(present));
+        });
 
         Ok(Arc::new(Self {
             inner,
@@ -206,11 +248,16 @@ fn decode(path: &Path) -> Option<(BoxedSource, Option<Duration>)> {
 /// pulls samples from the current track and writes them to the device, and
 /// notices when a track ends so it can replay it if looping is on.
 fn feeder_loop(
-    pcm: PCM,
+    initial_pcm: PCM,
+    primary_device: String,
+    fallback_device: String,
+    primary_card_name: &'static str,
     cmd_rx: mpsc::Receiver<Command>,
     playback: Arc<PlaybackState>,
     inner: Arc<Mutex<Inner>>,
 ) {
+    let mut pcm = initial_pcm;
+    let mut using_primary = false;
     let mut current: Option<(PathBuf, BoxedSource)> = None;
     let mut configured: Option<(u32, u16)> = None;
 
@@ -250,6 +297,48 @@ fn feeder_loop(
                     let was_paused = playback.paused.fetch_xor(true, Ordering::Relaxed);
                     if was_paused {
                         let _ = pcm.prepare();
+                    }
+                }
+                continue;
+            }
+            Ok(Command::DevicePresence(true)) => {
+                // Re-check right before opening: closes the gap between the
+                // watcher's last confirmation and this exact moment.
+                if !using_primary && device_watch::card_present(primary_card_name) {
+                    match PCM::new(&primary_device, Direction::Playback, false) {
+                        Ok(new_pcm) => {
+                            println!("audio-player: USB sound card available, switching to it");
+                            pcm = new_pcm;
+                            using_primary = true;
+                            configured = None;
+                            reconfigure_for_current(&pcm, &current, &mut configured, &playback);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "audio-player: USB sound card reported present but failed to open ({e}), staying on the fallback device"
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
+            Ok(Command::DevicePresence(false)) => {
+                if using_primary {
+                    match PCM::new(&fallback_device, Direction::Playback, false) {
+                        Ok(new_pcm) => {
+                            println!(
+                                "audio-player: USB sound card disconnected, switching to the built-in speaker"
+                            );
+                            pcm = new_pcm;
+                            using_primary = false;
+                            configured = None;
+                            reconfigure_for_current(&pcm, &current, &mut configured, &playback);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "audio-player: USB sound card disconnected but failed to open the fallback device: {e}"
+                            );
+                        }
                     }
                 }
                 continue;
@@ -323,6 +412,33 @@ fn configure(pcm: &PCM, rate: u32, channels: u16) -> alsa::Result<()> {
     pcm.sw_params(&swp)?;
 
     pcm.prepare()
+}
+
+/// If a track is currently loaded, negotiates hw params for it on `pcm` - a
+/// freshly-opened handle after a device switch - and primes it to keep
+/// playing mid-track. Leaves `frames_written` alone, so the reported
+/// position stays continuous across the switch instead of jumping back to
+/// zero.
+fn reconfigure_for_current(
+    pcm: &PCM,
+    current: &Option<(PathBuf, BoxedSource)>,
+    configured: &mut Option<(u32, u16)>,
+    playback: &PlaybackState,
+) {
+    let Some((_, source)) = current else {
+        return;
+    };
+    let rate = source.sample_rate().get();
+    let channels = source.channels().get();
+    match configure(pcm, rate, channels) {
+        Ok(()) => {
+            *configured = Some((rate, channels));
+            playback.sample_rate.store(rate, Ordering::Relaxed);
+        }
+        Err(e) => {
+            eprintln!("audio-player: failed to configure ALSA device after switch: {e}");
+        }
+    }
 }
 
 /// Writes one chunk of interleaved 16-bit samples, recovering once from a

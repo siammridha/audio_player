@@ -40,6 +40,19 @@ rc-service audio-player status
 cat /var/log/audio-player.log
 ```
 
+**USB sound card, with a fallback:** the player plays through an external
+USB sound card when it's plugged in, and through the device's own built-in
+speaker otherwise - no restart needed either way. To check the switch is
+working, watch the log while you plug/unplug the USB card:
+
+```sh
+tail -f /var/log/audio-player.log
+```
+
+Plugging it in should log a switch to the USB card after about 5 seconds
+(a settle delay before it's touched). Unplugging it should log a switch
+back to the built-in speaker right away.
+
 ## 3. Use it
 
 Find the device's IP (`ip addr` on the device), then from any phone or

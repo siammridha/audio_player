@@ -1,6 +1,7 @@
 use std::path::Path;
 
 pub mod alsa_backend;
+pub mod device_watch;
 pub mod mock_backend;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]

@@ -34,7 +34,13 @@ fn main() -> anyhow::Result<()> {
     } else {
         let device = env::var("AUDIO_DEVICE")
             .unwrap_or_else(|_| player::alsa_backend::DEFAULT_DEVICE.to_string());
-        AlsaPlayer::new(&device)?
+        let fallback_device = env::var("AUDIO_DEVICE_FALLBACK")
+            .unwrap_or_else(|_| player::alsa_backend::DEFAULT_FALLBACK_DEVICE.to_string());
+        AlsaPlayer::new(
+            &device,
+            &fallback_device,
+            player::alsa_backend::PRIMARY_CARD_NAME,
+        )?
     };
 
     let state = Arc::new(http::AppState {
