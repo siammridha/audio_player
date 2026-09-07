@@ -52,5 +52,6 @@ Environment variables the program reads:
 | `PORT`              | `3000`                          | web server port                   |
 | `MUSIC_DIR`         | `/var/lib/audio-player/audio`   | folder scanned for audio files    |
 | `AUDIO_PLAYER_MOCK` | unset                           | set to `1` to skip real playback  |
+| `AUDIO_DEVICE`      | `plughw:CARD=Device,DEV=0`      | ALSA device sound is played through (see `aplay -l` for card names) |
 
 Supported audio file types: `.mp3`, `.wav`, `.flac`, `.ogg`.

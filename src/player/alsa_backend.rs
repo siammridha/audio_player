@@ -11,10 +11,15 @@ use rodio::{Decoder, Source};
 
 use super::{Player, PlayerStatus};
 
-/// `plughw`, not `hw`/`default`: this chip's clock only actually runs at
-/// 48kHz, so anything else (most mp3s are 44.1kHz) needs ALSA's software
-/// rate conversion, which raw `hw:0,0` doesn't do.
-const DEVICE: &str = "plughw:0,0";
+/// Default ALSA device: the USB sound card, addressed by its ALSA card name
+/// ("Device", visible in `aplay -l`) rather than a card number, since the
+/// number can shift depending on what else is plugged in. Override with the
+/// `AUDIO_DEVICE` env var.
+///
+/// `plughw`, not `hw`/`default`: only using `plughw` gets ALSA's software
+/// rate conversion, needed for files whose sample rate doesn't match what
+/// the card runs at natively.
+pub const DEFAULT_DEVICE: &str = "plughw:CARD=Device,DEV=0";
 const CHUNK_FRAMES: usize = 4096;
 
 type BoxedSource = Box<dyn Source<Item = f32> + Send>;
@@ -63,11 +68,11 @@ pub struct AlsaPlayer {
 }
 
 impl AlsaPlayer {
-    /// Opens the default ALSA playback device and starts the background
-    /// feeder thread that owns it for the life of the process.
-    pub fn new() -> anyhow::Result<Arc<Self>> {
-        let pcm = PCM::new(DEVICE, Direction::Playback, false)
-            .map_err(|e| anyhow::anyhow!("failed to open ALSA device {DEVICE:?}: {e}"))?;
+    /// Opens `device` for playback and starts the background feeder thread
+    /// that owns it for the life of the process.
+    pub fn new(device: &str) -> anyhow::Result<Arc<Self>> {
+        let pcm = PCM::new(device, Direction::Playback, false)
+            .map_err(|e| anyhow::anyhow!("failed to open ALSA device {device:?}: {e}"))?;
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let playback = Arc::new(PlaybackState::default());

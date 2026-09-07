@@ -64,7 +64,7 @@ error_log="/var/log/audio-player.log"
 
 : "${PORT:=3000}"
 : "${MUSIC_DIR:=/var/lib/audio-player/audio}"
-export PORT MUSIC_DIR
+export PORT MUSIC_DIR AUDIO_DEVICE
 
 depend() {
 	need net

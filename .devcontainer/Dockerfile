@@ -1,9 +1,11 @@
 # The plain Alpine devcontainer base.
 FROM mcr.microsoft.com/devcontainers/base:alpine
 
-# Toolchain deps the base image lacks: a C linker for rustc, plus pkg-config /
-# OpenSSL headers commonly needed by Rust crates.
-RUN apk add --no-cache build-base pkgconf openssl-dev
+# Toolchain deps the base image lacks: a C linker for rustc, pkg-config /
+# OpenSSL headers commonly needed by Rust crates, and ALSA headers so the
+# alsa-sys crate can build (the container has no sound card, but the code
+# still needs to compile here).
+RUN apk add --no-cache build-base pkgconf openssl-dev alsa-lib-dev
 
 # Rust via rustup, in the same shared paths the official rust image uses (so
 # the cargo-cache volume mount in devcontainer.json keeps working).
