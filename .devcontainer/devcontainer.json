@@ -34,7 +34,7 @@
 			"type": "volume"
 		},
 		{
-			"source": "devcontainer-claude-config-${devcontainerId}",
+			"source": "${localWorkspaceFolderBasename}-devcontainer-claude-config",
 			"target": "/home/vscode/.claude",
 			"type": "volume"
 		},
