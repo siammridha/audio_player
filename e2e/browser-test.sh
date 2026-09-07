@@ -66,13 +66,33 @@ sleep 0.2
 play_pause=$(browser eval "document.getElementById('play-pause').textContent")
 assert_eq "play/pause button reads Play once paused" '"Play"' "$play_pause"
 
+loop_on_by_default=$(browser eval "document.getElementById('loop').classList.contains('on')")
+assert_eq "loop is on by default" "true" "$loop_on_by_default"
+
 browser click "#loop" >/dev/null
-loop_on=$(browser eval "document.getElementById('loop').classList.contains('on')")
-assert_eq "loop button turns on" "true" "$loop_on"
+loop_off=$(browser eval "document.getElementById('loop').classList.contains('on')")
+assert_eq "loop button turns off" "false" "$loop_off"
 
 browser click "#restart" >/dev/null
 sleep 0.2
 play_pause=$(browser eval "document.getElementById('play-pause').textContent")
 assert_eq "start over resumes playing" '"Pause"' "$play_pause"
+
+browser eval "const el = document.getElementById('volume-slider'); el.value = 42; el.dispatchEvent(new Event('input'));" >/dev/null
+sleep 1.3
+volume_after_roundtrip=$(browser eval "document.getElementById('volume-slider').value")
+assert_eq "volume slider change round-trips through the server" '"42"' "$volume_after_roundtrip"
+
+manifest_href=$(browser eval "document.querySelector('link[rel=manifest]').getAttribute('href')")
+assert_eq "page links a web app manifest" '"/manifest.webmanifest"' "$manifest_href"
+
+manifest_status=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/manifest.webmanifest")
+assert_eq "manifest is served" "200" "$manifest_status"
+
+sw_status=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/sw.js")
+assert_eq "service worker is served" "200" "$sw_status"
+
+icon_status=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/icon-192.png")
+assert_eq "app icon is served" "200" "$icon_status"
 
 echo "All browser checks passed."

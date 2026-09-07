@@ -53,6 +53,10 @@ struct PlaybackState {
     /// A track is loaded and hasn't finished playing (naturally or via error).
     active: AtomicBool,
     paused: AtomicBool,
+    /// Volume, 0.0..=1.0, stored as `f32::to_bits` since there's no `AtomicF32`.
+    /// Read by the feeder thread on every chunk, so an atomic rather than a
+    /// mutex to keep that hot path lock-free.
+    volume_bits: AtomicU32,
 }
 
 /// Plays audio for real, through the machine's own sound card via ALSA.
@@ -76,9 +80,12 @@ impl AlsaPlayer {
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let playback = Arc::new(PlaybackState::default());
+        playback
+            .volume_bits
+            .store(1.0f32.to_bits(), Ordering::Relaxed);
         let inner = Arc::new(Mutex::new(Inner {
             track: None,
-            looping: false,
+            looping: true,
         }));
 
         let feeder_playback = Arc::clone(&playback);
@@ -143,6 +150,13 @@ impl Player for AlsaPlayer {
         self.inner.lock().unwrap().looping = looping;
     }
 
+    fn set_volume(&self, volume: f32) {
+        let clamped = volume.clamp(0.0, 1.0);
+        self.playback
+            .volume_bits
+            .store(clamped.to_bits(), Ordering::Relaxed);
+    }
+
     fn status(&self) -> PlayerStatus {
         let inner = self.inner.lock().unwrap();
         let playing = inner.track.is_some()
@@ -170,6 +184,7 @@ impl Player for AlsaPlayer {
             looping: inner.looping,
             position,
             duration,
+            volume: f32::from_bits(self.playback.volume_bits.load(Ordering::Relaxed)),
         }
     }
 }
@@ -251,10 +266,11 @@ fn feeder_loop(
         }
 
         let channels = source.channels().get() as usize;
+        let volume = f32::from_bits(playback.volume_bits.load(Ordering::Relaxed));
         let buf: Vec<i16> = source
             .by_ref()
             .take(CHUNK_FRAMES * channels)
-            .map(|s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+            .map(|s| (s.clamp(-1.0, 1.0) * volume * i16::MAX as f32) as i16)
             .collect();
 
         if buf.is_empty() {

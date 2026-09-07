@@ -11,6 +11,10 @@ pub struct AppState {
     pub player: Arc<dyn Player>,
     pub music_dir: PathBuf,
     pub index_html: &'static str,
+    pub manifest: &'static str,
+    pub service_worker: &'static str,
+    pub icon_192: &'static [u8],
+    pub icon_512: &'static [u8],
 }
 
 pub struct Response {
@@ -36,6 +40,14 @@ impl Response {
         }
     }
 
+    fn raw(content_type: &'static str, body: &[u8]) -> Self {
+        Self {
+            status: 200,
+            content_type,
+            body: body.to_vec(),
+        }
+    }
+
     fn not_found() -> Self {
         Self::json(404, json!({ "error": "not found" }))
     }
@@ -56,6 +68,11 @@ struct LoopRequest {
     looping: bool,
 }
 
+#[derive(Deserialize)]
+struct VolumeRequest {
+    volume: f32,
+}
+
 /// Routes one request to a handler. Kept as a plain function of its inputs
 /// (no tiny_http types) so it can be tested without a real socket.
 pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Response {
@@ -65,6 +82,14 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
 
     match (method, path) {
         ("GET", "/") => Response::html(state.index_html),
+        ("GET", "/manifest.webmanifest") => {
+            Response::raw("application/manifest+json", state.manifest.as_bytes())
+        }
+        ("GET", "/sw.js") => {
+            Response::raw("application/javascript", state.service_worker.as_bytes())
+        }
+        ("GET", "/icon-192.png") => Response::raw("image/png", state.icon_192),
+        ("GET", "/icon-512.png") => Response::raw("image/png", state.icon_512),
 
         ("GET", "/api/files") => {
             let files = library::list_files(&state.music_dir);
@@ -104,6 +129,14 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
             status_response(state)
         }
 
+        ("POST", "/api/volume") => {
+            let Ok(req) = serde_json::from_slice::<VolumeRequest>(body) else {
+                return Response::bad_request("expected { \"volume\": 0.0..=1.0 }");
+            };
+            state.player.set_volume(req.volume);
+            status_response(state)
+        }
+
         _ => Response::not_found(),
     }
 }
@@ -127,6 +160,10 @@ mod tests {
             player: Arc::new(MockPlayer::new()),
             music_dir: dir.path().to_path_buf(),
             index_html: "<html></html>",
+            manifest: "{}",
+            service_worker: "",
+            icon_192: b"fake png",
+            icon_512: b"fake png",
         };
         (state, dir)
     }
@@ -220,5 +257,48 @@ mod tests {
         assert_eq!(json_body(&resp)["loop"], true);
         let status = handle(&state, "GET", "/api/status", b"");
         assert_eq!(json_body(&status)["loop"], true);
+    }
+
+    #[test]
+    fn loop_defaults_to_on() {
+        let (state, _dir) = test_state();
+        let status = handle(&state, "GET", "/api/status", b"");
+        assert_eq!(json_body(&status)["loop"], true);
+    }
+
+    #[test]
+    fn volume_defaults_to_full_and_persists_in_status() {
+        let (state, _dir) = test_state();
+        let status = handle(&state, "GET", "/api/status", b"");
+        assert_eq!(json_body(&status)["volume"], 1.0);
+
+        let resp = handle(&state, "POST", "/api/volume", br#"{"volume":0.5}"#);
+        assert_eq!(json_body(&resp)["volume"], 0.5);
+        let status = handle(&state, "GET", "/api/status", b"");
+        assert_eq!(json_body(&status)["volume"], 0.5);
+    }
+
+    #[test]
+    fn volume_rejects_bad_body() {
+        let (state, _dir) = test_state();
+        let resp = handle(&state, "POST", "/api/volume", b"not json");
+        assert_eq!(resp.status, 400);
+    }
+
+    #[test]
+    fn serves_pwa_assets() {
+        let (state, _dir) = test_state();
+
+        let manifest = handle(&state, "GET", "/manifest.webmanifest", b"");
+        assert_eq!(manifest.status, 200);
+        assert_eq!(manifest.content_type, "application/manifest+json");
+
+        let sw = handle(&state, "GET", "/sw.js", b"");
+        assert_eq!(sw.status, 200);
+        assert_eq!(sw.content_type, "application/javascript");
+
+        let icon = handle(&state, "GET", "/icon-192.png", b"");
+        assert_eq!(icon.status, 200);
+        assert_eq!(icon.content_type, "image/png");
     }
 }

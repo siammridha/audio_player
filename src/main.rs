@@ -12,6 +12,10 @@ use player::mock_backend::MockPlayer;
 use tiny_http::Server;
 
 const INDEX_HTML: &str = include_str!("../assets/index.html");
+const MANIFEST: &str = include_str!("../assets/manifest.webmanifest");
+const SERVICE_WORKER: &str = include_str!("../assets/sw.js");
+const ICON_192: &[u8] = include_bytes!("../assets/icon-192.png");
+const ICON_512: &[u8] = include_bytes!("../assets/icon-512.png");
 const WORKER_THREADS: usize = 4;
 
 fn main() -> anyhow::Result<()> {
@@ -37,6 +41,10 @@ fn main() -> anyhow::Result<()> {
         player,
         music_dir,
         index_html: INDEX_HTML,
+        manifest: MANIFEST,
+        service_worker: SERVICE_WORKER,
+        icon_192: ICON_192,
+        icon_512: ICON_512,
     });
 
     let server = Server::http(("0.0.0.0", port))

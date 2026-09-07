@@ -3,7 +3,10 @@
 A small web-controlled audio player for a Dell Wyse 3040 running Alpine
 Linux. The program plays sound out loud through the device's own sound
 card. A web page (dark background, orange accents) served on port 3000 is
-the remote control: pick a file, play/pause, loop, start over.
+the remote control: pick a file, play/pause, loop (on by default), start
+over, adjust volume. It's a PWA, so it can be installed to a phone's home
+screen ("Add to Home Screen" in the browser menu) and launches full-screen
+like an app.
 
 ## How it's built
 
@@ -15,8 +18,17 @@ the remote control: pick a file, play/pause, loop, start over.
     on this device's sound driver that silently drops audio).
   - `mock_backend.rs` - in-memory only, no sound card needed. Used by tests.
 - `src/http.rs` - the web page and a small JSON API (`/api/files`,
-  `/api/status`, `/api/play`, `/api/toggle`, `/api/restart`, `/api/loop`).
+  `/api/status`, `/api/play`, `/api/toggle`, `/api/restart`, `/api/loop`,
+  `/api/volume`), plus the PWA files (`/manifest.webmanifest`, `/sw.js`,
+  `/icon-192.png`, `/icon-512.png`).
 - `assets/index.html` - the whole UI: one file, inline CSS/JS, no build step.
+- `assets/manifest.webmanifest`, `assets/sw.js`, `assets/icon-*.png` - what
+  makes the page a PWA: an app manifest, a service worker that caches the
+  page shell for fast/offline loading (never the `/api/*` calls, which
+  always need the live server), and the app icon.
+  The device is only reachable over plain `http://`, not `https://`, so
+  browsers won't show an automatic "install this app" prompt - use "Add to
+  Home Screen" from the browser's menu instead, which works the same way.
 - `deploy/install.sh` - run on the device; downloads the latest release
   binary from GitHub and sets it up as an OpenRC service that starts on boot.
 - `.github/workflows/build.yml` - on a pushed version tag, builds the release

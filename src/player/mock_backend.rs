@@ -8,6 +8,7 @@ use crate::library;
 struct State {
     file: Option<String>,
     looping: bool,
+    volume: f32,
     duration: Option<f64>,
     /// Seconds accumulated from previous play segments (before the current
     /// one, if any).
@@ -28,7 +29,8 @@ impl MockPlayer {
         Self {
             state: Mutex::new(State {
                 file: None,
-                looping: false,
+                looping: true,
+                volume: 1.0,
                 duration: None,
                 elapsed_base: 0.0,
                 running_since: None,
@@ -71,6 +73,10 @@ impl Player for MockPlayer {
         self.state.lock().unwrap().looping = looping;
     }
 
+    fn set_volume(&self, volume: f32) {
+        self.state.lock().unwrap().volume = volume.clamp(0.0, 1.0);
+    }
+
     fn status(&self) -> PlayerStatus {
         let state = self.state.lock().unwrap();
         let position = state.elapsed_base
@@ -84,6 +90,7 @@ impl Player for MockPlayer {
             looping: state.looping,
             position,
             duration: state.duration,
+            volume: state.volume,
         }
     }
 }

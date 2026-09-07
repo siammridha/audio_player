@@ -13,6 +13,8 @@ pub struct PlayerStatus {
     pub position: f64,
     /// Total length of the current track in seconds, if known.
     pub duration: Option<f64>,
+    /// Playback volume, from 0.0 (silent) to 1.0 (full).
+    pub volume: f32,
 }
 
 /// A single audio output. All methods act on "the currently loaded track" and
@@ -31,6 +33,9 @@ pub trait Player: Send + Sync {
     fn restart(&self);
 
     fn set_loop(&self, looping: bool);
+
+    /// Sets playback volume. `volume` is clamped to 0.0..=1.0.
+    fn set_volume(&self, volume: f32);
 
     fn status(&self) -> PlayerStatus;
 }
