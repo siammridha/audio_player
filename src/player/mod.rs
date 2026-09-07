@@ -16,6 +16,9 @@ pub struct PlayerStatus {
     pub duration: Option<f64>,
     /// Playback volume, from 0.0 (silent) to 1.0 (full).
     pub volume: f32,
+    /// Which sound output is currently in use: "usb", "built-in", or
+    /// "mock".
+    pub output: &'static str,
 }
 
 /// A single audio output. All methods act on "the currently loaded track" and

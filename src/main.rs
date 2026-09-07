@@ -1,5 +1,6 @@
 mod http;
 mod library;
+mod log;
 mod player;
 
 use std::env;
@@ -56,7 +57,9 @@ fn main() -> anyhow::Result<()> {
     let server = Server::http(("0.0.0.0", port))
         .map_err(|e| anyhow::anyhow!("failed to bind port {port}: {e}"))?;
     let server = Arc::new(server);
-    println!("audio-player listening on http://0.0.0.0:{port}");
+    log::print_line(&format!(
+        "audio-player: server started, listening on http://0.0.0.0:{port}"
+    ));
 
     let handles: Vec<_> = (0..WORKER_THREADS)
         .map(|_| {

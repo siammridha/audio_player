@@ -21,17 +21,25 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
+use alsa::ctl::Ctl;
+
 const SETTLE_DELAY: Duration = Duration::from_secs(5);
 const SOCKET_OPEN_RETRIES: u32 = 5;
 const SOCKET_RETRY_DELAY: Duration = Duration::from_secs(1);
 const RECV_BUF_LEN: usize = 8192;
 
-/// True if an ALSA card with this short name (as shown by `aplay -l` /
-/// `alsa::card::Card::get_name`) currently exists.
+/// True if an ALSA card with this short id (as shown by `aplay -l` and used
+/// in `CARD=` device strings, e.g. "Device") currently exists.
+///
+/// This is `snd_ctl_card_info_get_id`, not `snd_card_get_name` - the name is
+/// a longer descriptive string (e.g. "USB PnP Sound Device"), a different
+/// field that never matches the short id.
 pub(crate) fn card_present(name: &str) -> bool {
     alsa::card::Iter::new()
         .filter_map(|c| c.ok())
-        .filter_map(|c| c.get_name().ok())
+        .filter_map(|c| Ctl::from_card(&c, false).ok())
+        .filter_map(|ctl| ctl.card_info().ok())
+        .filter_map(|info| info.get_id().ok().map(|s| s.to_string()))
         .any(|n| n == name)
 }
 
@@ -46,7 +54,18 @@ pub fn watch(card_name: &'static str, on_change: impl Fn(bool) + Send + 'static)
     thread::spawn(move || {
         run_presence_loop(
             move || card_present(card_name),
-            on_change,
+            move |present| {
+                if present {
+                    crate::log::print_line(&format!(
+                        "device_watch: {card_name} sound card detected"
+                    ));
+                } else {
+                    crate::log::print_line(&format!(
+                        "device_watch: {card_name} sound card disconnected"
+                    ));
+                }
+                on_change(present);
+            },
             recheck_rx,
             SETTLE_DELAY,
         )
@@ -87,13 +106,17 @@ fn settle_and_confirm(
     settle: Duration,
     on_change: &impl Fn(bool),
 ) -> bool {
-    println!("device_watch: card appeared, waiting {settle:?} before using it");
+    crate::log::print_line(&format!(
+        "device_watch: sound card noticed, waiting {settle:?} before using it"
+    ));
     thread::sleep(settle);
     if check() {
         on_change(true);
         true
     } else {
-        println!("device_watch: card disappeared again during the settle wait, ignoring");
+        crate::log::print_line(
+            "device_watch: sound card vanished again during the settle wait, ignoring",
+        );
         false
     }
 }
@@ -103,9 +126,9 @@ fn settle_and_confirm(
 /// reality. Gives up (and stops watching) if the socket can't be opened.
 fn uevent_listener(recheck: Sender<()>) {
     let Some(fd) = open_socket_with_retries() else {
-        eprintln!(
+        crate::log::eprint_line(&format!(
             "device_watch: failed to open netlink socket after {SOCKET_OPEN_RETRIES} attempts, giving up on hotplug detection"
-        );
+        ));
         return;
     };
 

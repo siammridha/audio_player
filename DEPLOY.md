@@ -49,9 +49,27 @@ working, watch the log while you plug/unplug the USB card:
 tail -f /var/log/audio-player.log
 ```
 
-Plugging it in should log a switch to the USB card after about 5 seconds
-(a settle delay before it's touched). Unplugging it should log a switch
-back to the built-in speaker right away.
+Every line is timestamped (UTC), so it can be lined up against `dmesg` and
+`aplay -l` when something looks wrong. What to expect:
+
+- On startup: `starting on the built-in speaker ... checking for the USB
+  sound card`.
+- Plugging the USB card in: `sound card detected`, then about 5 seconds
+  later (a settle delay before it's touched) `switching to the USB sound
+  card`.
+- Unplugging it: `sound card disconnected`, then right away `falling back
+  to the built-in speaker`.
+- Using the web page: `playing <file>`, `paused playback`/`resumed
+  playback`, and `volume set to N%` for every action, so you can tell from
+  the log alone whether a button press on the page actually reached the
+  player.
+
+If audio isn't playing, check which device it's actually using (a line
+like `switching to the USB sound card` with nothing after it means it's
+still there) - sound is likely just coming out of the *other* output than
+the one you're listening on. The web page itself also shows this, as a
+small line under the title ("Playing through USB sound card" / "Playing
+through built-in speaker").
 
 ## 3. Use it
 

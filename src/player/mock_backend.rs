@@ -91,6 +91,7 @@ impl Player for MockPlayer {
             position,
             duration: state.duration,
             volume: state.volume,
+            output: "mock",
         }
     }
 }

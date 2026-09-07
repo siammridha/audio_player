@@ -1,6 +1,6 @@
 {
-  "name": "Audio Player",
-  "short_name": "Audio Player",
+  "name": "Ruqyah",
+  "short_name": "Ruqyah",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

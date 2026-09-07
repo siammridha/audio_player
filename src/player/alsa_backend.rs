@@ -72,6 +72,9 @@ struct PlaybackState {
     /// Read by the feeder thread on every chunk, so an atomic rather than a
     /// mutex to keep that hot path lock-free.
     volume_bits: AtomicU32,
+    /// Whether the feeder is currently playing through the USB card
+    /// (`primary_device`) rather than the built-in fallback.
+    using_primary: AtomicBool,
 }
 
 /// Plays audio for real, through the machine's own sound card via ALSA.
@@ -102,6 +105,9 @@ impl AlsaPlayer {
         let pcm = PCM::new(fallback_device, Direction::Playback, false).map_err(|e| {
             anyhow::anyhow!("failed to open ALSA fallback device {fallback_device:?}: {e}")
         })?;
+        crate::log::print_line(&format!(
+            "audio-player: starting on the built-in speaker ({fallback_device}), checking for the USB sound card ({primary_card_name})..."
+        ));
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let playback = Arc::new(PlaybackState::default());
@@ -197,6 +203,10 @@ impl Player for AlsaPlayer {
         self.playback
             .volume_bits
             .store(clamped.to_bits(), Ordering::Relaxed);
+        crate::log::print_line(&format!(
+            "audio-player: volume set to {:.0}%",
+            clamped * 100.0
+        ));
     }
 
     fn status(&self) -> PlayerStatus {
@@ -227,6 +237,11 @@ impl Player for AlsaPlayer {
             position,
             duration,
             volume: f32::from_bits(self.playback.volume_bits.load(Ordering::Relaxed)),
+            output: if self.playback.using_primary.load(Ordering::Relaxed) {
+                "usb"
+            } else {
+                "built-in"
+            },
         }
     }
 }
@@ -278,7 +293,9 @@ fn feeder_loop(
                 let channels = source.channels().get();
                 if configured != Some((rate, channels)) {
                     if let Err(e) = configure(&pcm, rate, channels) {
-                        eprintln!("audio-player: failed to configure ALSA device: {e}");
+                        crate::log::eprint_line(&format!(
+                            "audio-player: failed to configure ALSA device: {e}"
+                        ));
                         current = None;
                         playback.active.store(false, Ordering::Relaxed);
                         continue;
@@ -289,6 +306,11 @@ fn feeder_loop(
                 playback.frames_written.store(0, Ordering::Relaxed);
                 playback.paused.store(false, Ordering::Relaxed);
                 playback.active.store(true, Ordering::Relaxed);
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string());
+                crate::log::print_line(&format!("audio-player: playing {name}"));
                 current = Some((path, source));
                 continue;
             }
@@ -297,6 +319,9 @@ fn feeder_loop(
                     let was_paused = playback.paused.fetch_xor(true, Ordering::Relaxed);
                     if was_paused {
                         let _ = pcm.prepare();
+                        crate::log::print_line("audio-player: resumed playback");
+                    } else {
+                        crate::log::print_line("audio-player: paused playback");
                     }
                 }
                 continue;
@@ -307,16 +332,17 @@ fn feeder_loop(
                 if !using_primary && device_watch::card_present(primary_card_name) {
                     match PCM::new(&primary_device, Direction::Playback, false) {
                         Ok(new_pcm) => {
-                            println!("audio-player: USB sound card available, switching to it");
+                            crate::log::print_line("audio-player: switching to the USB sound card");
                             pcm = new_pcm;
                             using_primary = true;
+                            playback.using_primary.store(true, Ordering::Relaxed);
                             configured = None;
                             reconfigure_for_current(&pcm, &current, &mut configured, &playback);
                         }
                         Err(e) => {
-                            eprintln!(
+                            crate::log::eprint_line(&format!(
                                 "audio-player: USB sound card reported present but failed to open ({e}), staying on the fallback device"
-                            );
+                            ));
                         }
                     }
                 }
@@ -326,18 +352,19 @@ fn feeder_loop(
                 if using_primary {
                     match PCM::new(&fallback_device, Direction::Playback, false) {
                         Ok(new_pcm) => {
-                            println!(
-                                "audio-player: USB sound card disconnected, switching to the built-in speaker"
+                            crate::log::print_line(
+                                "audio-player: falling back to the built-in speaker",
                             );
                             pcm = new_pcm;
                             using_primary = false;
+                            playback.using_primary.store(false, Ordering::Relaxed);
                             configured = None;
                             reconfigure_for_current(&pcm, &current, &mut configured, &playback);
                         }
                         Err(e) => {
-                            eprintln!(
+                            crate::log::eprint_line(&format!(
                                 "audio-player: USB sound card disconnected but failed to open the fallback device: {e}"
-                            );
+                            ));
                         }
                     }
                 }
@@ -382,7 +409,7 @@ fn feeder_loop(
                     .fetch_add(frames as u64, Ordering::Relaxed);
             }
             Err(e) => {
-                eprintln!("audio-player: ALSA write error: {e}");
+                crate::log::eprint_line(&format!("audio-player: ALSA write error: {e}"));
                 current = None;
                 playback.active.store(false, Ordering::Relaxed);
             }
@@ -436,7 +463,9 @@ fn reconfigure_for_current(
             playback.sample_rate.store(rate, Ordering::Relaxed);
         }
         Err(e) => {
-            eprintln!("audio-player: failed to configure ALSA device after switch: {e}");
+            crate::log::eprint_line(&format!(
+                "audio-player: failed to configure ALSA device after switch: {e}"
+            ));
         }
     }
 }
