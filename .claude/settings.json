@@ -1,17 +1,6 @@
 {
   "enabledPlugins": {
-    "ponytail@ponytail": true
+    "ponytail@ponytail": false
   },
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cd /workspaces/step_ca_ui; s=$(date +%s.%N); if cargo build -q 2>/tmp/claude-build.log; then st='ok'; else n=$(grep -c '^error' /tmp/claude-build.log 2>/dev/null); st=\"FAILED, ${n:-?} error(s) (see /tmp/claude-build.log)\"; fi; t=$(awk \"BEGIN{printf \\\"%.1f\\\", $(date +%s.%N)-$s}\"); printf '{\"systemMessage\":\"build: %s in %ss\"}\\n' \"$st\" \"$t\""
-          }
-        ]
-      }
-    ]
-  }
+  "remoteControlAtStartup": false
 }
