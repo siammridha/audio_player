@@ -18,7 +18,7 @@
             "label": "cargo-build",
             "detail": "Run cargo Build",
             "type": "shell",
-            "command": "cargo build",
+            "command": "cargo nextest run && mkdir -p /tmp/music && touch /tmp/music/song1.mp3 && AUDIO_PLAYER_MOCK=1 MUSIC_DIR=/tmp/music cargo run",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",

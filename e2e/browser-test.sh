@@ -13,6 +13,7 @@ MUSIC_DIR=$(mktemp -d)
 touch "$MUSIC_DIR/song1.mp3" "$MUSIC_DIR/song2.wav"
 
 cargo build --quiet
+BIN="${CARGO_TARGET_DIR:-target}/debug/audio-player"
 
 SERVER_PID=""
 cleanup() {
@@ -22,7 +23,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-AUDIO_PLAYER_MOCK=1 MUSIC_DIR="$MUSIC_DIR" PORT="$PORT" ./target/debug/audio-player &
+AUDIO_PLAYER_MOCK=1 MUSIC_DIR="$MUSIC_DIR" PORT="$PORT" "$BIN" &
 SERVER_PID=$!
 
 for _ in $(seq 1 50); do
@@ -78,10 +79,33 @@ sleep 0.2
 play_pause=$(browser eval "document.getElementById('play-pause').textContent")
 assert_eq "start over resumes playing" '"Pause"' "$play_pause"
 
-browser eval "const el = document.getElementById('volume-slider'); el.value = 42; el.dispatchEvent(new Event('input'));" >/dev/null
+browser eval "(() => { const el = document.getElementById('volume-slider'); el.focus(); el.value = 65; el.dispatchEvent(new Event('input')); })()" >/dev/null
+volume_icon_while_sliding=$(browser eval "document.getElementById('volume-icon').innerHTML")
+echo "$volume_icon_while_sliding" | grep -q 'M17.5' && echo "ok: volume icon shows the high-volume glyph while sliding to 65%" || { echo "FAIL: volume icon did not update to the high-volume glyph"; exit 1; }
+
+browser eval "(() => { const el = document.getElementById('volume-slider'); el.value = 0; el.dispatchEvent(new Event('input')); })()" >/dev/null
+volume_icon_muted=$(browser eval "document.getElementById('volume-icon').innerHTML")
+echo "$volume_icon_muted" | grep -q 'M16 9l5 6' && echo "ok: volume icon shows the muted glyph at 0%" || { echo "FAIL: volume icon did not switch to the muted glyph"; exit 1; }
+
+browser eval "document.getElementById('volume-slider').dispatchEvent(new Event('pointerdown'))" >/dev/null
+badge_visible=$(browser eval "document.getElementById('volume-badge').classList.contains('visible')")
+assert_eq "percentage badge appears while sliding" "true" "$badge_visible"
+
+browser eval "(() => { const el = document.getElementById('volume-slider'); el.value = 42; el.dispatchEvent(new Event('input')); })()" >/dev/null
+badge_text=$(browser eval "document.getElementById('volume-badge').textContent")
+assert_eq "percentage badge shows the live value while sliding" '"42%"' "$badge_text"
+
 sleep 1.3
-volume_after_roundtrip=$(browser eval "document.getElementById('volume-slider').value")
-assert_eq "volume slider change round-trips through the server" '"42"' "$volume_after_roundtrip"
+volume_before_release=$(browser eval "document.getElementById('volume-slider').value")
+assert_eq "sliding without releasing does not push volume to the server" '"42"' "$volume_before_release"
+
+browser eval "(() => { const el = document.getElementById('volume-slider'); el.dispatchEvent(new Event('pointerup')); el.dispatchEvent(new Event('change')); })()" >/dev/null
+badge_hidden=$(browser eval "document.getElementById('volume-badge').classList.contains('visible')")
+assert_eq "percentage badge disappears once the slider is released" "false" "$badge_hidden"
+
+sleep 1.3
+volume_after_release=$(browser eval "document.getElementById('volume-slider').value")
+assert_eq "releasing the slider round-trips the volume through the server" '"42"' "$volume_after_release"
 
 manifest_href=$(browser eval "document.querySelector('link[rel=manifest]').getAttribute('href')")
 assert_eq "page links a web app manifest" '"/manifest.webmanifest"' "$manifest_href"
