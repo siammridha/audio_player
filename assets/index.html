@@ -1,5 +1,5 @@
 <title>Ruqyah</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#160f08" />
 <link rel="manifest" href="/manifest.webmanifest" />
 <link rel="icon" href="/icon-192.png" />
@@ -27,7 +27,7 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     display: flex;
     justify-content: center;
-    padding: 2rem 1.25rem;
+    padding: max(2rem, env(safe-area-inset-top)) 1.25rem max(2rem, env(safe-area-inset-bottom));
   }
   main { width: 100%; max-width: 26rem; }
   h1 {
@@ -63,46 +63,52 @@
   #progress-fill { height: 100%; width: 0%; background: var(--orange); border-radius: 2px; }
   #time { color: var(--muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-  .controls { display: flex; align-items: center; justify-content: center; gap: 1.5rem; margin-bottom: 1.75rem; }
+  .controls { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-bottom: 1.75rem; }
   .controls button {
     display: flex;
     align-items: center;
     justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0.6rem;
     border: none;
     background: transparent;
     color: var(--text);
     cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
     transition: transform 0.1s ease, opacity 0.15s ease;
   }
   .controls button:active:not(:disabled) { transform: scale(0.93); }
   .controls button:disabled { opacity: 0.35; cursor: default; }
   .controls button span { display: none; }
-  #restart svg, #loop svg { width: 22px; height: 22px; color: var(--muted); }
+  #restart svg, #loop svg { width: 24px; height: 24px; color: var(--muted); }
   #loop.on svg { color: var(--orange); }
   #play-pause {
-    width: 4.2rem;
-    height: 4.2rem;
+    width: 4.6rem;
+    height: 4.6rem;
     border-radius: 50%;
     background: var(--orange);
     color: #241400;
   }
-  #play-pause svg { width: 28px; height: 28px; }
+  #play-pause svg { width: 30px; height: 30px; }
   #play-pause:disabled { background: var(--orange-dim); color: #1a1a1a; }
 
-  #volume { display: flex; align-items: center; gap: 0.75rem; margin: 0 0 1.75rem; color: var(--muted); }
-  #volume svg { width: 16px; height: 16px; }
+  #volume { display: flex; align-items: center; gap: 0.85rem; margin: 0 0 1.75rem; color: var(--muted); }
+  #volume svg { width: 24px; height: 24px; }
   #volume-slider {
     flex: 1;
     -webkit-appearance: none;
     appearance: none;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--track);
+    height: 6px;
+    background: transparent;
     outline: none;
+    padding: 14px 0;
+    touch-action: pan-x;
   }
   #volume-slider::-webkit-slider-runnable-track {
-    height: 4px;
-    border-radius: 2px;
+    height: 6px;
+    border-radius: 3px;
     background: linear-gradient(
       to right,
       var(--orange) var(--volume-pct, 100%),
@@ -112,19 +118,19 @@
   #volume-slider::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 14px;
-    height: 14px;
-    margin-top: -5px;
+    width: 26px;
+    height: 26px;
+    margin-top: -10px;
     border-radius: 50%;
     background: var(--orange);
     cursor: pointer;
     transition: transform 0.1s ease;
   }
-  #volume-slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--track); }
-  #volume-slider::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--orange); }
+  #volume-slider::-moz-range-track { height: 6px; border-radius: 3px; background: var(--track); }
+  #volume-slider::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--orange); }
   #volume-slider::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
+    width: 26px;
+    height: 26px;
     border: none;
     border-radius: 50%;
     background: var(--orange);
@@ -147,16 +153,42 @@
     background: transparent;
     color: var(--muted);
     border: none;
-    padding: 0.7rem 0.1rem;
-    font-size: 0.85rem;
+    padding: 0.95rem 0.1rem;
+    font-size: 1.05rem;
     cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
   #files button svg { display: none; }
   #files button.active { color: var(--orange); font-weight: 600; }
   #files .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #files .dur { margin-left: auto; font-size: 0.72rem; font-variant-numeric: tabular-nums; }
-  #empty { color: var(--muted); font-size: 0.85rem; padding: 0.7rem 0.1rem; }
+  #files .dur { margin-left: auto; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+  #empty { color: var(--muted); font-size: 0.95rem; padding: 0.95rem 0.1rem; }
+
+  #pull-indicator {
+    position: fixed;
+    top: 0;
+    left: 50%;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--bg1);
+    border: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--orange);
+    opacity: 0;
+    transform: translate(-50%, -44px);
+    z-index: 10;
+    pointer-events: none;
+  }
+  #pull-indicator svg { width: 18px; height: 18px; }
 </style>
+
+<div id="pull-indicator">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+</div>
 
 <main>
   <h1>Ruqyah</h1>
@@ -362,5 +394,64 @@
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js");
+  }
+
+  // Pull-to-refresh: iOS Safari (including installed PWAs) has no built-in
+  // pull-to-refresh like Android Chrome does, so this drives it by hand
+  // from raw touch events - but only when installed to the home screen.
+  // A regular Safari tab already has its own pull gesture at the top, and
+  // running both at once made this fire on every small drag instead of a
+  // deliberate pull-and-release.
+  const isStandalone =
+    window.navigator.standalone === true ||
+    window.matchMedia("(display-mode: standalone)").matches;
+
+  if (isStandalone) {
+    const pullIndicatorEl = document.getElementById("pull-indicator");
+    const PULL_THRESHOLD = 70;
+    let pullStartY = 0;
+    let pulling = false;
+    let pullProgress = 0;
+
+    function resetPullIndicator() {
+      pullProgress = 0;
+      pullIndicatorEl.style.opacity = "0";
+      pullIndicatorEl.style.transform = "translate(-50%, -44px)";
+    }
+
+    document.addEventListener(
+      "touchstart",
+      (e) => {
+        if (window.scrollY > 0) return;
+        pullStartY = e.touches[0].clientY;
+        pulling = true;
+      },
+      { passive: true }
+    );
+
+    document.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!pulling) return;
+        const distance = e.touches[0].clientY - pullStartY;
+        if (distance <= 0) {
+          resetPullIndicator();
+          return;
+        }
+        pullProgress = Math.min(distance / PULL_THRESHOLD, 1);
+        pullIndicatorEl.style.opacity = String(pullProgress);
+        pullIndicatorEl.style.transform = `translate(-50%, ${-44 + pullProgress * 70}px) rotate(${pullProgress * 360}deg)`;
+      },
+      { passive: true }
+    );
+
+    document.addEventListener("touchend", () => {
+      pulling = false;
+      if (pullProgress >= 1) {
+        location.reload();
+      } else {
+        resetPullIndicator();
+      }
+    });
   }
 </script>

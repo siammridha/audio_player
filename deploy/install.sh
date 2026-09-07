@@ -64,7 +64,7 @@ error_log="/var/log/audio-player.log"
 
 : "${PORT:=3000}"
 : "${MUSIC_DIR:=/var/lib/audio-player/audio}"
-export PORT MUSIC_DIR AUDIO_DEVICE
+export PORT MUSIC_DIR AUDIO_DEVICE RUST_LOG
 
 depend() {
 	need net
@@ -77,6 +77,10 @@ EOF
 chmod 755 /etc/init.d/audio-player
 
 mkdir -p /var/lib/audio-player/audio
+
+# Keep the installed service quiet by default - full diagnostic logging is
+# what test-on-device.sh is for.
+echo 'export RUST_LOG=error' > /etc/conf.d/audio-player
 
 rc-update add audio-player default
 rc-service audio-player restart

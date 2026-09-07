@@ -20,6 +20,10 @@ const ICON_512: &[u8] = include_bytes!("../assets/icon-512.png");
 const WORKER_THREADS: usize = 4;
 
 fn main() -> anyhow::Result<()> {
+    let log_level = log::level_name();
+    log::log_startup_banner(env!("CARGO_PKG_VERSION"));
+    log::info(&format!("audio-player starting (log level: {log_level})"));
+
     let port: u16 = env::var("PORT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -57,7 +61,7 @@ fn main() -> anyhow::Result<()> {
     let server = Server::http(("0.0.0.0", port))
         .map_err(|e| anyhow::anyhow!("failed to bind port {port}: {e}"))?;
     let server = Arc::new(server);
-    log::print_line(&format!(
+    log::info(&format!(
         "audio-player: server started, listening on http://0.0.0.0:{port}"
     ));
 

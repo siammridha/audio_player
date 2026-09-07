@@ -56,11 +56,9 @@ pub fn watch(card_name: &'static str, on_change: impl Fn(bool) + Send + 'static)
             move || card_present(card_name),
             move |present| {
                 if present {
-                    crate::log::print_line(&format!(
-                        "device_watch: {card_name} sound card detected"
-                    ));
+                    crate::log::info(&format!("device_watch: {card_name} sound card detected"));
                 } else {
-                    crate::log::print_line(&format!(
+                    crate::log::info(&format!(
                         "device_watch: {card_name} sound card disconnected"
                     ));
                 }
@@ -106,7 +104,7 @@ fn settle_and_confirm(
     settle: Duration,
     on_change: &impl Fn(bool),
 ) -> bool {
-    crate::log::print_line(&format!(
+    crate::log::debug(&format!(
         "device_watch: sound card noticed, waiting {settle:?} before using it"
     ));
     thread::sleep(settle);
@@ -114,7 +112,7 @@ fn settle_and_confirm(
         on_change(true);
         true
     } else {
-        crate::log::print_line(
+        crate::log::debug(
             "device_watch: sound card vanished again during the settle wait, ignoring",
         );
         false
@@ -126,7 +124,7 @@ fn settle_and_confirm(
 /// reality. Gives up (and stops watching) if the socket can't be opened.
 fn uevent_listener(recheck: Sender<()>) {
     let Some(fd) = open_socket_with_retries() else {
-        crate::log::eprint_line(&format!(
+        crate::log::error(&format!(
             "device_watch: failed to open netlink socket after {SOCKET_OPEN_RETRIES} attempts, giving up on hotplug detection"
         ));
         return;

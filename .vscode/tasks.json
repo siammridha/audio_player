@@ -5,9 +5,9 @@
     "tasks": [
         {
             "label": "start-server",
-            "detail": "Kill any running audio-player, then cargo run",
+            "detail": "Deploy audio-player on device to test",
             "type": "shell",
-            "command": "pkill -x audio-player 2>/dev/null; pkill -x cargo 2>/dev/null; sleep 1; AUDIO_PLAYER_MOCK=1 MUSIC_DIR=/tmp/music PORT=3000 cargo run",
+            "command": "./test-on-device.sh",
             "presentation": {
                 "reveal": "always",
                 "panel": "dedicated",

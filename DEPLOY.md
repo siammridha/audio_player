@@ -49,8 +49,9 @@ working, watch the log while you plug/unplug the USB card:
 tail -f /var/log/audio-player.log
 ```
 
-Every line is timestamped (UTC), so it can be lined up against `dmesg` and
-`aplay -l` when something looks wrong. What to expect:
+Every line is timestamped (UTC) and tagged with a level (`ERROR`, `INFO`,
+or `DEBUG`), so it can be lined up against `dmesg` and `aplay -l` when
+something looks wrong. What to expect at the default `INFO` level:
 
 - On startup: `starting on the built-in speaker ... checking for the USB
   sound card`.
@@ -59,10 +60,9 @@ Every line is timestamped (UTC), so it can be lined up against `dmesg` and
   card`.
 - Unplugging it: `sound card disconnected`, then right away `falling back
   to the built-in speaker`.
-- Using the web page: `playing <file>`, `paused playback`/`resumed
-  playback`, and `volume set to N%` for every action, so you can tell from
-  the log alone whether a button press on the page actually reached the
-  player.
+- Using the web page: `playing <file>` and `paused playback`/`resumed
+  playback`, so you can tell from the log alone whether a button press on
+  the page actually reached the player.
 
 If audio isn't playing, check which device it's actually using (a line
 like `switching to the USB sound card` with nothing after it means it's
@@ -70,6 +70,20 @@ still there) - sound is likely just coming out of the *other* output than
 the one you're listening on. The web page itself also shows this, as a
 small line under the title ("Playing through USB sound card" / "Playing
 through built-in speaker").
+
+**Log level:** a normal install (`deploy/install.sh`) sets the service to
+`RUST_LOG=error`, so only failures are logged - the lines above stay
+silent unless you turn it up. To see them (or `DEBUG`-level detail, like
+volume changes and the settle-wait timing around hotplug), edit
+`/etc/conf.d/audio-player` on the device:
+
+```sh
+echo 'export RUST_LOG=info' > /etc/conf.d/audio-player   # or debug
+rc-service audio-player restart
+```
+
+`./test-on-device.sh` always sets this to `debug` for you, since that's
+the point of using it.
 
 ## 3. Use it
 

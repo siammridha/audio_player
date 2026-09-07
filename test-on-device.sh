@@ -73,8 +73,10 @@ $SCP "$BINARY" "root@$DEVICE_IP:/usr/local/bin/audio-player.new"
 
 echo "Installing and restarting audio-player on the device..."
 # mv instead of overwriting the running binary directly, to avoid a
-# "Text file busy" error (same reason as deploy/install.sh).
-$SSH "chmod 755 /usr/local/bin/audio-player.new && mv /usr/local/bin/audio-player.new /usr/local/bin/audio-player && rc-service audio-player restart"
+# "Text file busy" error (same reason as deploy/install.sh). Also turns on
+# debug-level logging for this test run, regardless of what a real install
+# was set to.
+$SSH "echo 'export RUST_LOG=debug' > /etc/conf.d/audio-player && chmod 755 /usr/local/bin/audio-player.new && mv /usr/local/bin/audio-player.new /usr/local/bin/audio-player && rc-service audio-player restart"
 
 echo "Done. Status:"
 $SSH "rc-service audio-player status"
