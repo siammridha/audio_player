@@ -54,5 +54,7 @@
 				"spencerwmiles.vscode-task-buttons"
 			]
 		}
-	}
+	},
+
+	"appPort": "3000:3000"
 }

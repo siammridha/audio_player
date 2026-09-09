@@ -21,6 +21,19 @@ pub struct PlayerStatus {
     pub output: &'static str,
 }
 
+/// A snapshot of playback state saved to disk so it survives a service
+/// restart. Mirrors the persistable subset of `PlayerStatus` (not
+/// `duration`/`output`, which are re-derived on load).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PersistedState {
+    pub file: String,
+    pub playing: bool,
+    #[serde(rename = "loop")]
+    pub looping: bool,
+    pub position: f64,
+    pub volume: f32,
+}
+
 /// A single audio output. All methods act on "the currently loaded track" and
 /// are safe to call with no track loaded (they're just no-ops in that case,
 /// except `select`).
@@ -40,6 +53,11 @@ pub trait Player: Send + Sync {
 
     /// Sets playback volume. `volume` is clamped to 0.0..=1.0.
     fn set_volume(&self, volume: f32);
+
+    /// Restores previously-saved state. Called once at startup, before
+    /// the server starts. `path` has already been resolved and confirmed
+    /// to exist. Best-effort: must not panic on a stale/bad snapshot.
+    fn restore(&self, path: &Path, snapshot: &PersistedState);
 
     fn status(&self) -> PlayerStatus;
 }

@@ -2,10 +2,12 @@ mod http;
 mod library;
 mod log;
 mod player;
+mod state_store;
 
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use player::Player;
 use player::alsa_backend::AlsaPlayer;
@@ -33,6 +35,19 @@ fn main() -> anyhow::Result<()> {
         .into();
     std::fs::create_dir_all(&music_dir)?;
 
+    let state_file: PathBuf = env::var("STATE_FILE")
+        .unwrap_or_else(|_| "/var/lib/audio-player/state.json".to_string())
+        .into();
+    // A persistence failure must never stop the player from starting, so
+    // this is logged rather than propagated with `?`.
+    if let Some(parent) = state_file.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        log::error(&format!(
+            "audio-player: could not create {parent:?} for STATE_FILE, persistence disabled: {e}"
+        ));
+    }
+
     let use_mock = env::var("AUDIO_PLAYER_MOCK").is_ok_and(|v| v == "1");
     let player: Arc<dyn Player> = if use_mock {
         Arc::new(MockPlayer::new())
@@ -48,9 +63,20 @@ fn main() -> anyhow::Result<()> {
         )?
     };
 
+    if let Some(snapshot) = state_store::load(&state_file) {
+        match library::resolve(&music_dir, &snapshot.file) {
+            Some(path) => player.restore(&path, &snapshot),
+            None => log::info(&format!(
+                "audio-player: saved track {:?} no longer found, skipping restore",
+                snapshot.file
+            )),
+        }
+    }
+
     let state = Arc::new(http::AppState {
         player,
         music_dir,
+        state_file,
         index_html: INDEX_HTML,
         manifest: MANIFEST,
         service_worker: SERVICE_WORKER,
@@ -64,6 +90,19 @@ fn main() -> anyhow::Result<()> {
     log::info(&format!(
         "audio-player: server started, listening on http://0.0.0.0:{port}"
     ));
+
+    {
+        let state = Arc::clone(&state);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(5));
+                let status = state.player.status();
+                if status.playing {
+                    state_store::persist(&state.state_file, &status);
+                }
+            }
+        });
+    }
 
     let handles: Vec<_> = (0..WORKER_THREADS)
         .map(|_| {

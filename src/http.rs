@@ -6,10 +6,12 @@ use serde_json::json;
 
 use crate::library;
 use crate::player::Player;
+use crate::state_store;
 
 pub struct AppState {
     pub player: Arc<dyn Player>,
     pub music_dir: PathBuf,
+    pub state_file: PathBuf,
     pub index_html: &'static str,
     pub manifest: &'static str,
     pub service_worker: &'static str,
@@ -105,6 +107,7 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
             match library::resolve(&state.music_dir, &req.file) {
                 Some(path) => {
                     state.player.select(&path, &req.file);
+                    save_status(state);
                     status_response(state)
                 }
                 None => Response::bad_request("unknown file"),
@@ -113,11 +116,13 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
 
         ("POST", "/api/toggle") => {
             state.player.toggle_play_pause();
+            save_status(state);
             status_response(state)
         }
 
         ("POST", "/api/restart") => {
             state.player.restart();
+            save_status(state);
             status_response(state)
         }
 
@@ -126,6 +131,7 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
                 return Response::bad_request("expected { \"loop\": true|false }");
             };
             state.player.set_loop(req.looping);
+            save_status(state);
             status_response(state)
         }
 
@@ -134,6 +140,7 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
                 return Response::bad_request("expected { \"volume\": 0.0..=1.0 }");
             };
             state.player.set_volume(req.volume);
+            save_status(state);
             status_response(state)
         }
 
@@ -143,6 +150,13 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
 
 fn status_response(state: &AppState) -> Response {
     Response::json(200, serde_json::to_value(state.player.status()).unwrap())
+}
+
+/// Called by the mutating endpoints after they change the player, not by the
+/// plain `GET /api/status` (which the frontend polls every second and
+/// shouldn't trigger a write each time).
+fn save_status(state: &AppState) {
+    state_store::persist(&state.state_file, &state.player.status());
 }
 
 #[cfg(test)]
@@ -159,6 +173,7 @@ mod tests {
         let state = AppState {
             player: Arc::new(MockPlayer::new()),
             music_dir: dir.path().to_path_buf(),
+            state_file: dir.path().join("state.json"),
             index_html: "<html></html>",
             manifest: "{}",
             service_worker: "",
@@ -283,6 +298,25 @@ mod tests {
         let (state, _dir) = test_state();
         let resp = handle(&state, "POST", "/api/volume", b"not json");
         assert_eq!(resp.status, 400);
+    }
+
+    #[test]
+    fn mutating_call_persists_state_to_disk() {
+        let (state, _dir) = test_state();
+        assert!(!state.state_file.exists());
+
+        handle(&state, "POST", "/api/play", br#"{"file":"song.mp3"}"#);
+
+        let saved = state_store::load(&state.state_file).unwrap();
+        assert_eq!(saved.file, "song.mp3");
+        assert!(saved.playing);
+    }
+
+    #[test]
+    fn plain_status_poll_does_not_persist() {
+        let (state, _dir) = test_state();
+        handle(&state, "GET", "/api/status", b"");
+        assert!(!state.state_file.exists());
     }
 
     #[test]

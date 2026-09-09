@@ -9,7 +9,7 @@ use alsa::pcm::{Access, Format, HwParams, PCM};
 use alsa::{Direction, ValueOr};
 use rodio::{Decoder, Source};
 
-use super::{Player, PlayerStatus, device_watch};
+use super::{PersistedState, Player, PlayerStatus, device_watch};
 
 /// Default ALSA device: the external USB sound card the player is meant to
 /// play through, addressed by its ALSA card name ("Device", visible in
@@ -52,7 +52,10 @@ struct Inner {
 /// Sent from `Player` trait methods (HTTP worker threads) to the feeder
 /// thread, which is the sole owner of the ALSA device.
 enum Command {
-    Play(PathBuf, BoxedSource),
+    /// The `u64` is the initial `frames_written` value to report - 0 for a
+    /// fresh play, or a computed offset when resuming mid-track (see
+    /// `AlsaPlayer::load_at`).
+    Play(PathBuf, BoxedSource, u64),
     TogglePlayPause,
     /// A confirmed flip in the USB card's presence, from `device_watch`.
     DevicePresence(bool),
@@ -152,9 +155,33 @@ impl AlsaPlayer {
     /// the old track queued) if the file can't be opened or decoded,
     /// otherwise the track's length if it could be determined.
     fn load(&self, path: &Path) -> Option<Option<Duration>> {
-        let (source, duration) = decode(path)?;
+        self.load_at(path, Duration::ZERO)
+    }
+
+    /// Like `load`, but seeks the freshly-decoded source to `start` before
+    /// handing it to the feeder thread - used to resume mid-track after a
+    /// restore. Seeking is best-effort and permanently approximate for
+    /// compressed formats (mp3 seeks to the nearest frame), so the
+    /// reported position reflects the requested `start`, not necessarily
+    /// the exact landed position; if the seek fails outright, playback
+    /// just starts from the beginning instead of failing the load.
+    fn load_at(&self, path: &Path, start: Duration) -> Option<Option<Duration>> {
+        let (mut source, duration) = decode(path)?;
+        let initial_frames = if start > Duration::ZERO {
+            match source.try_seek(start) {
+                Ok(()) => (start.as_secs_f64() * source.sample_rate().get() as f64).round() as u64,
+                Err(e) => {
+                    crate::log::error(&format!(
+                        "audio-player: seek to {start:?} failed ({e}), starting {path:?} from the beginning"
+                    ));
+                    0
+                }
+            }
+        } else {
+            0
+        };
         self.cmd_tx
-            .send(Command::Play(path.to_path_buf(), source))
+            .send(Command::Play(path.to_path_buf(), source, initial_frames))
             .ok()?;
         Some(duration)
     }
@@ -207,6 +234,30 @@ impl Player for AlsaPlayer {
             "audio-player: volume set to {:.0}%",
             clamped * 100.0
         ));
+    }
+
+    fn restore(&self, path: &Path, snapshot: &PersistedState) {
+        let mut inner = self.inner.lock().unwrap();
+        let start = Duration::from_secs_f64(snapshot.position.max(0.0));
+        if let Some(duration) = self.load_at(path, start) {
+            inner.track = Some(Track {
+                path: path.to_path_buf(),
+                display_name: snapshot.file.clone(),
+                duration,
+            });
+            inner.looping = snapshot.looping;
+        }
+        drop(inner);
+        self.set_volume(snapshot.volume);
+        // Play always resets `paused` to false before this is processed, and
+        // both sends are on the same Sender from the same thread, so mpsc's
+        // FIFO ordering guarantees TogglePlayPause lands after Play and
+        // flips paused to true. (A DevicePresence message could interleave
+        // between them from the hotplug-watch thread, but it never touches
+        // `paused`/`active`/`frames_written`, so it's harmless here.)
+        if !snapshot.playing {
+            let _ = self.cmd_tx.send(Command::TogglePlayPause);
+        }
     }
 
     fn status(&self) -> PlayerStatus {
@@ -288,7 +339,7 @@ fn feeder_loop(
         };
 
         match cmd {
-            Ok(Command::Play(path, source)) => {
+            Ok(Command::Play(path, source, initial_frames)) => {
                 let rate = source.sample_rate().get();
                 let channels = source.channels().get();
                 if configured != Some((rate, channels)) {
@@ -303,7 +354,7 @@ fn feeder_loop(
                     configured = Some((rate, channels));
                 }
                 playback.sample_rate.store(rate, Ordering::Relaxed);
-                playback.frames_written.store(0, Ordering::Relaxed);
+                playback.frames_written.store(initial_frames, Ordering::Relaxed);
                 playback.paused.store(false, Ordering::Relaxed);
                 playback.active.store(true, Ordering::Relaxed);
                 let name = path

@@ -7,7 +7,9 @@ otherwise. A web page (dark background, orange accents) served on port 3000 is
 the remote control: pick a file, play/pause, loop (on by default), start
 over, adjust volume. It's a PWA, so it can be installed to a phone's home
 screen ("Add to Home Screen" in the browser menu) and launches full-screen
-like an app.
+like an app. Playback state (track, position, volume, loop, play/pause) is
+saved to disk as it changes, so a service restart or crash comes back
+exactly where it left off.
 
 ## How it's built
 
@@ -28,6 +30,11 @@ like an app.
     5-second settle delay (re-checked after the wait) before anything opens
     it; a disappearing card is acted on immediately.
   - `mock_backend.rs` - in-memory only, no sound card needed. Used by tests.
+- `src/state_store.rs` - saves/loads the `STATE_FILE` JSON snapshot (track,
+  position, volume, loop, play/pause) used to restore playback after a
+  restart. Saved on every play/toggle/restart/loop/volume change, and every
+  5 seconds while playing; failures are logged and never block startup or a
+  request.
 - `src/http.rs` - the web page and a small JSON API (`/api/files`,
   `/api/status`, `/api/play`, `/api/toggle`, `/api/restart`, `/api/loop`,
   `/api/volume`), plus the PWA files (`/manifest.webmanifest`, `/sw.js`,
@@ -77,6 +84,7 @@ Environment variables the program reads:
 |---------------------|---------------------------------|-----------------------------------|
 | `PORT`              | `3000`                          | web server port                   |
 | `MUSIC_DIR`         | `/var/lib/audio-player/audio`   | folder scanned for audio files    |
+| `STATE_FILE`        | `/var/lib/audio-player/state.json` | file where playback state is saved so it survives a restart |
 | `AUDIO_PLAYER_MOCK` | unset                           | set to `1` to skip real playback  |
 | `AUDIO_DEVICE`      | `plughw:CARD=Device,DEV=0`      | ALSA device sound is played through when the USB sound card is present (see `aplay -l` for card names) |
 | `AUDIO_DEVICE_FALLBACK` | `plughw:CARD=rt5672,DEV=0`  | ALSA device used instead when the USB sound card isn't plugged in (the Wyse 3040's built-in speaker) |

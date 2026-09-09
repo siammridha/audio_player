@@ -64,7 +64,8 @@ error_log="/var/log/audio-player.log"
 
 : "${PORT:=3000}"
 : "${MUSIC_DIR:=/var/lib/audio-player/audio}"
-export PORT MUSIC_DIR AUDIO_DEVICE RUST_LOG
+: "${STATE_FILE:=/var/lib/audio-player/state.json}"
+export PORT MUSIC_DIR STATE_FILE AUDIO_DEVICE RUST_LOG
 
 depend() {
 	need net
