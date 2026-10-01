@@ -5,11 +5,17 @@ Linux. The program plays sound out loud through an external USB sound card
 when it's plugged in, falling back to the device's own built-in speaker
 otherwise. A web page (dark background, orange accents) served on port 3000 is
 the remote control: pick a file, play/pause, loop (on by default), start
-over, adjust volume. It's a PWA, so it can be installed to a phone's home
-screen ("Add to Home Screen" in the browser menu) and launches full-screen
-like an app. Playback state (track, position, volume, loop, play/pause) is
-saved to disk as it changes, so a service restart or crash comes back
-exactly where it left off.
+over, adjust volume, and set a sleep timer. It's a PWA, so it can be
+installed to a phone's home screen ("Add to Home Screen" in the browser
+menu) and launches full-screen like an app. Playback state (track,
+position, volume, loop, play/pause) is saved to disk as it changes, so a
+service restart or crash comes back exactly where it left off. A pending
+sleep timer is saved the same way, so it still fires even across a restart.
+
+The sleep timer pauses playback at a chosen clock time instead of sounding
+an alarm: pick a time, and the volume fades out over the last 2 seconds
+before pausing. It's driven by the server, not the browser tab, so it
+still fires even if the phone is asleep or the page is closed.
 
 ## How it's built
 
@@ -35,10 +41,19 @@ exactly where it left off.
   restart. Saved on every play/toggle/restart/loop/volume change, and every
   5 seconds while playing; failures are logged and never block startup or a
   request.
+- `src/sleep_timer.rs` - the sleep timer: a target Unix-ms timestamp (sent
+  by the browser, which already knows the device's local time, so the
+  backend never has to deal with timezones), ticked every 100ms by a
+  background thread in `main.rs`. Fades the volume down over the last 2
+  seconds, then pauses (only if still playing) and restores the volume.
+  Saved to a `sleep_timer.json` file next to `STATE_FILE` so it survives a
+  restart; a saved timer whose time has already passed is discarded on
+  load instead of firing late.
 - `src/http.rs` - the web page and a small JSON API (`/api/files`,
   `/api/status`, `/api/play`, `/api/toggle`, `/api/restart`, `/api/loop`,
-  `/api/volume`), plus the PWA files (`/manifest.webmanifest`, `/sw.js`,
-  `/icon-192.png`, `/icon-512.png`).
+  `/api/volume`, `/api/sleep-timer`, `/api/sleep-timer/cancel`), plus the
+  PWA files (`/manifest.webmanifest`, `/sw.js`, `/icon-192.png`,
+  `/icon-512.png`).
 - `assets/index.html` - the whole UI: one file, inline CSS/JS, no build step.
 - `assets/manifest.webmanifest`, `assets/sw.js`, `assets/icon-*.png` - what
   makes the page a PWA: an app manifest, a service worker that caches the

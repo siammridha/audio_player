@@ -1,17 +1,20 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::library;
 use crate::player::Player;
+use crate::sleep_timer::{self, TimerState};
 use crate::state_store;
 
 pub struct AppState {
     pub player: Arc<dyn Player>,
     pub music_dir: PathBuf,
     pub state_file: PathBuf,
+    pub sleep_timer_file: PathBuf,
+    pub sleep_timer: Mutex<Option<TimerState>>,
     pub index_html: &'static str,
     pub manifest: &'static str,
     pub service_worker: &'static str,
@@ -73,6 +76,11 @@ struct LoopRequest {
 #[derive(Deserialize)]
 struct VolumeRequest {
     volume: f32,
+}
+
+#[derive(Deserialize)]
+struct SleepTimerRequest {
+    at: u64,
 }
 
 /// Routes one request to a handler. Kept as a plain function of its inputs
@@ -144,12 +152,36 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
             status_response(state)
         }
 
+        ("POST", "/api/sleep-timer") => {
+            let Ok(req) = serde_json::from_slice::<SleepTimerRequest>(body) else {
+                return Response::bad_request("expected { \"at\": <unix ms, in the future> }");
+            };
+            if req.at <= sleep_timer::now_ms() {
+                return Response::bad_request("at must be in the future");
+            }
+            let timer = TimerState::new(req.at);
+            *state.sleep_timer.lock().unwrap() = Some(timer);
+            sleep_timer::persist(&state.sleep_timer_file, Some(&timer));
+            status_response(state)
+        }
+
+        ("POST", "/api/sleep-timer/cancel") => {
+            *state.sleep_timer.lock().unwrap() = None;
+            sleep_timer::persist(&state.sleep_timer_file, None);
+            status_response(state)
+        }
+
         _ => Response::not_found(),
     }
 }
 
 fn status_response(state: &AppState) -> Response {
-    Response::json(200, serde_json::to_value(state.player.status()).unwrap())
+    let mut value = serde_json::to_value(state.player.status()).unwrap();
+    value["sleepTimer"] = match *state.sleep_timer.lock().unwrap() {
+        Some(timer) => json!({ "at": timer.at }),
+        None => serde_json::Value::Null,
+    };
+    Response::json(200, value)
 }
 
 /// Called by the mutating endpoints after they change the player, not by the
@@ -174,6 +206,8 @@ mod tests {
             player: Arc::new(MockPlayer::new()),
             music_dir: dir.path().to_path_buf(),
             state_file: dir.path().join("state.json"),
+            sleep_timer_file: dir.path().join("sleep_timer.json"),
+            sleep_timer: Mutex::new(None),
             index_html: "<html></html>",
             manifest: "{}",
             service_worker: "",
@@ -298,6 +332,82 @@ mod tests {
         let (state, _dir) = test_state();
         let resp = handle(&state, "POST", "/api/volume", b"not json");
         assert_eq!(resp.status, 400);
+    }
+
+    #[test]
+    fn status_has_no_sleep_timer_by_default() {
+        let (state, _dir) = test_state();
+        let status = handle(&state, "GET", "/api/status", b"");
+        assert_eq!(json_body(&status)["sleepTimer"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn setting_a_sleep_timer_shows_up_in_status() {
+        let (state, _dir) = test_state();
+        let at = sleep_timer::now_ms() + 60_000;
+        let resp = handle(
+            &state,
+            "POST",
+            "/api/sleep-timer",
+            format!(r#"{{"at":{at}}}"#).as_bytes(),
+        );
+        assert_eq!(json_body(&resp)["sleepTimer"]["at"], at);
+
+        let status = handle(&state, "GET", "/api/status", b"");
+        assert_eq!(json_body(&status)["sleepTimer"]["at"], at);
+    }
+
+    #[test]
+    fn sleep_timer_rejects_a_time_that_is_not_in_the_future() {
+        let (state, _dir) = test_state();
+        let at = sleep_timer::now_ms();
+        let resp = handle(
+            &state,
+            "POST",
+            "/api/sleep-timer",
+            format!(r#"{{"at":{at}}}"#).as_bytes(),
+        );
+        assert_eq!(resp.status, 400);
+    }
+
+    #[test]
+    fn sleep_timer_rejects_bad_body() {
+        let (state, _dir) = test_state();
+        let resp = handle(&state, "POST", "/api/sleep-timer", b"not json");
+        assert_eq!(resp.status, 400);
+    }
+
+    #[test]
+    fn cancelling_a_sleep_timer_clears_it() {
+        let (state, _dir) = test_state();
+        let at = sleep_timer::now_ms() + 60_000;
+        handle(
+            &state,
+            "POST",
+            "/api/sleep-timer",
+            format!(r#"{{"at":{at}}}"#).as_bytes(),
+        );
+
+        let resp = handle(&state, "POST", "/api/sleep-timer/cancel", b"");
+        assert_eq!(json_body(&resp)["sleepTimer"], serde_json::Value::Null);
+
+        let status = handle(&state, "GET", "/api/status", b"");
+        assert_eq!(json_body(&status)["sleepTimer"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn setting_a_sleep_timer_persists_it_to_disk() {
+        let (state, _dir) = test_state();
+        let at = sleep_timer::now_ms() + 60_000;
+        handle(
+            &state,
+            "POST",
+            "/api/sleep-timer",
+            format!(r#"{{"at":{at}}}"#).as_bytes(),
+        );
+
+        let saved = sleep_timer::load(&state.sleep_timer_file, 0).unwrap();
+        assert_eq!(saved.at, at);
     }
 
     #[test]

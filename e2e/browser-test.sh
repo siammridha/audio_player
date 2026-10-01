@@ -202,4 +202,92 @@ assert_eq "restart with the saved track missing starts with nothing loaded" "nul
 now_playing=$(browser eval "document.getElementById('now-playing').textContent")
 assert_eq "page reflects nothing loaded after the saved track disappears" '"Nothing selected"' "$now_playing"
 
+# --- Sleep timer ---
+# The on-page time picker only has minute precision, so the "does it
+# actually pause on time" behavior itself is covered by `cargo nextest run`
+# (sleep_timer.rs, with a fake clock). This only exercises the browser-side
+# wiring: opening the panel, picking a time, seeing the pending state, and
+# cancelling - plus, via the same API a real minute-granularity pick would
+# hit, that a timer set a couple of seconds out actually pauses playback and
+# clears the on-page display once the background poll picks it up.
+
+browser click "#files button[data-name='song2.wav']" >/dev/null
+sleep 0.2
+play_pause=$(browser eval "document.getElementById('play-pause').textContent")
+assert_eq "song2.wav is playing before the sleep timer tests" '"Pause"' "$play_pause"
+
+browser click "#sleep-timer-toggle" >/dev/null
+panel_open=$(browser eval "document.getElementById('sleep-timer-panel').classList.contains('open')")
+assert_eq "sleep timer panel opens" "true" "$panel_open"
+
+browser eval "(() => {
+	const target = new Date(Date.now() + 2 * 60 * 1000);
+	const hh = String(target.getHours()).padStart(2, '0');
+	const mm = String(target.getMinutes()).padStart(2, '0');
+	document.getElementById('sleep-timer-time').value = \`\${hh}:\${mm}\`;
+})()" >/dev/null
+browser click "#sleep-timer-set" >/dev/null
+sleep 0.2
+
+panel_closed=$(browser eval "!document.getElementById('sleep-timer-panel').classList.contains('open')")
+assert_eq "sleep timer panel closes after setting" "true" "$panel_closed"
+toggle_on=$(browser eval "document.getElementById('sleep-timer-toggle').classList.contains('on')")
+assert_eq "sleep timer toggle shows active once set" "true" "$toggle_on"
+status_text=$(browser eval "document.getElementById('sleep-timer-status').textContent")
+echo "$status_text" | grep -q "Pausing at" && echo "ok: sleep timer status shows a pausing time" || { echo "FAIL: sleep timer status missing, got [$status_text]"; exit 1; }
+
+remove_visible=$(browser eval "!document.getElementById('sleep-timer-remove').hidden")
+assert_eq "the direct remove (x) button appears once a timer is set" "true" "$remove_visible"
+
+browser click "#sleep-timer-remove" >/dev/null
+sleep 0.2
+toggle_off=$(browser eval "document.getElementById('sleep-timer-toggle').classList.contains('on')")
+assert_eq "the direct remove button clears the sleep timer" "false" "$toggle_off"
+remove_hidden=$(browser eval "getComputedStyle(document.getElementById('sleep-timer-remove')).display")
+assert_eq "the remove button hides itself once there's no timer" '"none"' "$remove_hidden"
+
+# The in-panel Cancel button is a second way to remove it, for when the
+# panel is already open to change the time.
+browser eval "(() => {
+	const target = new Date(Date.now() + 2 * 60 * 1000);
+	const hh = String(target.getHours()).padStart(2, '0');
+	const mm = String(target.getMinutes()).padStart(2, '0');
+	document.getElementById('sleep-timer-time').value = \`\${hh}:\${mm}\`;
+})()" >/dev/null
+browser click "#sleep-timer-toggle" >/dev/null
+browser click "#sleep-timer-set" >/dev/null
+sleep 0.2
+browser click "#sleep-timer-toggle" >/dev/null
+browser click "#sleep-timer-cancel" >/dev/null
+sleep 0.2
+toggle_off=$(browser eval "document.getElementById('sleep-timer-toggle').classList.contains('on')")
+assert_eq "cancelling from the panel clears the sleep timer toggle" "false" "$toggle_off"
+
+# Set one a couple of seconds out directly through the API (what a
+# minute-granularity pick lands on in practice too) and let the page's
+# existing 1s status poll pick up the pause and the cleared display.
+at_ms=$(($(date +%s%N) / 1000000 + 2500))
+curl -s -o /dev/null -X POST -H "Content-Type: application/json" \
+	-d "{\"at\":$at_ms}" "http://127.0.0.1:$PORT/api/sleep-timer"
+sleep 4
+
+play_pause=$(browser eval "document.getElementById('play-pause').textContent")
+assert_eq "sleep timer pauses playback once it fires" '"Play"' "$play_pause"
+toggle_off_after_fire=$(browser eval "document.getElementById('sleep-timer-toggle').classList.contains('on')")
+assert_eq "sleep timer display clears once it fires" "false" "$toggle_off_after_fire"
+
+# Restart with a timer still pending: it must survive on disk and still be
+# reported in status (the backend side of this is also unit-tested).
+browser click "#play-pause" >/dev/null
+sleep 0.2
+at_ms=$(($(date +%s%N) / 1000000 + 300000))
+curl -s -o /dev/null -X POST -H "Content-Type: application/json" \
+	-d "{\"at\":$at_ms}" "http://127.0.0.1:$PORT/api/sleep-timer"
+stop_server
+start_server
+sleep 1.3
+
+sleep_timer_after_restart=$(curl -s "http://127.0.0.1:$PORT/api/status" | jq '.sleepTimer.at')
+assert_eq "sleep timer survives a restart" "$at_ms" "$sleep_timer_after_restart"
+
 echo "All browser checks passed."
