@@ -107,8 +107,9 @@
   #volume { position: relative; display: flex; align-items: center; gap: 0.85rem; margin: 0 0 1.75rem; color: var(--muted); }
   #volume svg { width: 25px; height: 25px; }
 
-  #sleep-timer { position: relative; display: flex; align-items: center; justify-content: center; gap: 0.3rem; margin: 0 0 1.75rem; }
+  #sleep-timer { display: flex; align-items: center; justify-content: center; gap: 0.3rem; margin: 0 0 1.75rem; }
   #sleep-timer-toggle {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 0.4rem;
@@ -125,6 +126,22 @@
   }
   #sleep-timer-toggle svg { width: 18px; height: 18px; }
   #sleep-timer-toggle.on { color: var(--orange); background: rgba(255, 140, 26, 0.14); }
+  /* Invisible but real - tapping anywhere on the toggle hits this input
+     directly, so it opens the OS's own native time picker with no popover
+     or on-page text box of our own to lay out or keep on screen. */
+  #sleep-timer-time {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
   #sleep-timer-remove {
     display: flex;
     align-items: center;
@@ -142,50 +159,6 @@
   }
   #sleep-timer-remove svg { width: 12px; height: 12px; }
   #sleep-timer-remove[hidden] { display: none; }
-  #sleep-timer-panel {
-    position: fixed;
-    transform: scale(0.96);
-    transform-origin: top center;
-    width: min(21rem, calc(100vw - 2.5rem));
-    box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.75rem;
-    padding: 1rem;
-    background: rgba(30, 30, 30, 0.92);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border-radius: 16px;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s ease, transform 0.15s ease;
-    z-index: 900;
-  }
-  #sleep-timer-panel.open { opacity: 1; transform: scale(1); pointer-events: auto; }
-  #sleep-timer-status { color: var(--text); font-size: 0.8rem; text-align: center; margin: 0; }
-  #sleep-timer-time {
-    box-sizing: border-box;
-    background: var(--track);
-    border: none;
-    border-radius: 8px;
-    color: var(--text);
-    font-size: 1.1rem;
-    padding: 0.6rem;
-    color-scheme: dark;
-  }
-  #sleep-timer-actions { display: flex; justify-content: center; gap: 0.6rem; }
-  #sleep-timer-actions button {
-    border: none;
-    border-radius: 8px;
-    padding: 0.45rem 0.9rem;
-    font-size: 0.8rem;
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
-  }
-  #sleep-timer-set { background: var(--orange); color: #241400; }
-  #sleep-timer-cancel { background: transparent; color: var(--muted); }
   #volume-hud {
     position: fixed;
     top: 50%;
@@ -373,19 +346,12 @@
   </div>
 
   <div id="sleep-timer">
-    <button id="sleep-timer-toggle">
+    <div id="sleep-timer-toggle">
       <span id="sleep-timer-icon"></span>
       <span id="sleep-timer-label">Sleep Timer</span>
-    </button>
-    <button id="sleep-timer-remove" hidden aria-label="Remove sleep timer"></button>
-    <div id="sleep-timer-panel">
-      <p id="sleep-timer-status" hidden></p>
-      <input type="time" id="sleep-timer-time" />
-      <div id="sleep-timer-actions">
-        <button id="sleep-timer-set">Set</button>
-        <button id="sleep-timer-cancel" hidden>Cancel</button>
-      </div>
+      <input type="time" id="sleep-timer-time" aria-label="Sleep timer time" />
     </div>
+    <button id="sleep-timer-remove" hidden aria-label="Remove sleep timer"></button>
   </div>
 
   <ul id="files"></ul>
@@ -438,11 +404,7 @@
   const sleepTimerToggleEl = document.getElementById("sleep-timer-toggle");
   const sleepTimerIconEl = document.getElementById("sleep-timer-icon");
   const sleepTimerLabelEl = document.getElementById("sleep-timer-label");
-  const sleepTimerPanelEl = document.getElementById("sleep-timer-panel");
-  const sleepTimerStatusEl = document.getElementById("sleep-timer-status");
   const sleepTimerTimeEl = document.getElementById("sleep-timer-time");
-  const sleepTimerSetEl = document.getElementById("sleep-timer-set");
-  const sleepTimerCancelEl = document.getElementById("sleep-timer-cancel");
   const sleepTimerRemoveEl = document.getElementById("sleep-timer-remove");
 
   restartEl.innerHTML = ICONS.restart + "<span>Start Over</span>";
@@ -578,57 +540,29 @@
 
   function renderSleepTimer(sleepTimer) {
     sleepTimerToggleEl.classList.toggle("on", !!sleepTimer);
-    sleepTimerCancelEl.hidden = !sleepTimer;
     sleepTimerRemoveEl.hidden = !sleepTimer;
     if (sleepTimer) {
-      const time = new Date(sleepTimer.at).toLocaleTimeString([], {
+      const at = new Date(sleepTimer.at);
+      sleepTimerLabelEl.textContent = at.toLocaleTimeString([], {
         hour: "numeric",
         minute: "2-digit",
       });
-      sleepTimerStatusEl.textContent = `Pausing at ${time}`;
-      sleepTimerStatusEl.hidden = false;
-      sleepTimerLabelEl.textContent = time;
+      // Don't stomp on the field while its own picker is open editing it.
+      if (document.activeElement !== sleepTimerTimeEl) {
+        sleepTimerTimeEl.value = `${String(at.getHours()).padStart(2, "0")}:${String(
+          at.getMinutes()
+        ).padStart(2, "0")}`;
+      }
     } else {
-      sleepTimerStatusEl.hidden = true;
       sleepTimerLabelEl.textContent = "Sleep Timer";
     }
   }
 
-  function positionSleepTimerPanel() {
-    const margin = 12;
-    const toggleRect = sleepTimerToggleEl.getBoundingClientRect();
-    const panelWidth = sleepTimerPanelEl.offsetWidth;
-    let left = toggleRect.left + toggleRect.width / 2 - panelWidth / 2;
-    left = Math.max(margin, Math.min(left, window.innerWidth - panelWidth - margin));
-    sleepTimerPanelEl.style.left = `${left}px`;
-    sleepTimerPanelEl.style.top = `${toggleRect.bottom + 6}px`;
-  }
-
-  sleepTimerToggleEl.addEventListener("click", () => {
-    const opening = !sleepTimerPanelEl.classList.contains("open");
-    if (opening) {
-      positionSleepTimerPanel();
-    }
-    sleepTimerPanelEl.classList.toggle("open");
-    if (opening) {
-      sleepTimerTimeEl.focus();
-    }
-  });
-
-  document.addEventListener("click", (e) => {
-    if (!sleepTimerPanelEl.classList.contains("open")) return;
-    if (sleepTimerPanelEl.contains(e.target) || sleepTimerToggleEl.contains(e.target)) return;
-    sleepTimerPanelEl.classList.remove("open");
-  });
-
-  sleepTimerTimeEl.addEventListener("blur", () => {
-    // Deferred: blurring the input (e.g. clicking Set/Cancel) happens before
-    // that button's own click event, so closing immediately would make the
-    // panel un-clickable (pointer-events: none) before the click registers.
-    setTimeout(() => sleepTimerPanelEl.classList.remove("open"), 0);
-  });
-
-  sleepTimerSetEl.addEventListener("click", async () => {
+  // The input sits invisibly on top of the toggle (see CSS), so tapping the
+  // toggle taps the input directly and opens the OS's native time picker -
+  // no popover or on-page text box of our own. Picking a time fires this
+  // "change" event (via the iOS picker's checkmark, Enter, or tabbing away).
+  sleepTimerTimeEl.addEventListener("change", async () => {
     if (!sleepTimerTimeEl.value) return;
     const [hours, minutes] = sleepTimerTimeEl.value.split(":").map(Number);
     const target = new Date();
@@ -644,16 +578,9 @@
         body: JSON.stringify({ at: target.getTime() }),
       })
     );
-    sleepTimerPanelEl.classList.remove("open");
   });
 
-  sleepTimerCancelEl.addEventListener("click", async () => {
-    renderStatus(await api("/api/sleep-timer/cancel", { method: "POST" }));
-  });
-
-  sleepTimerRemoveEl.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    sleepTimerPanelEl.classList.remove("open");
+  sleepTimerRemoveEl.addEventListener("click", async () => {
     renderStatus(await api("/api/sleep-timer/cancel", { method: "POST" }));
   });
 
