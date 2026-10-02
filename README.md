@@ -13,10 +13,13 @@ service restart or crash comes back exactly where it left off. A pending
 sleep timer is saved the same way, so it still fires even across a restart.
 
 The sleep timer pauses playback at a chosen clock time instead of sounding
-an alarm: pick a time, and the volume fades out over the last 2 seconds
-before pausing. It repeats every day at that time until removed - it's not
-a one-off. It's driven by the server, not the browser tab, so it still
-fires even if the phone is asleep or the page is closed.
+an alarm: tap the sleep timer button to open the device's own native time
+picker (no on-page text box or popup of our own), pick a time, and the
+volume fades out over the last 2 seconds before pausing. The button turns
+orange and shows the picked time once it's set; tap the `x` next to it to
+remove it. It repeats every day at that time until removed - it's not a
+one-off. It's driven by the server, not the browser tab, so it still fires
+even if the phone is asleep or the page is closed.
 
 ## How it's built
 
