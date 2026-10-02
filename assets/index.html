@@ -621,6 +621,13 @@
     sleepTimerPanelEl.classList.remove("open");
   });
 
+  sleepTimerTimeEl.addEventListener("blur", () => {
+    // Deferred: blurring the input (e.g. clicking Set/Cancel) happens before
+    // that button's own click event, so closing immediately would make the
+    // panel un-clickable (pointer-events: none) before the click registers.
+    setTimeout(() => sleepTimerPanelEl.classList.remove("open"), 0);
+  });
+
   sleepTimerSetEl.addEventListener("click", async () => {
     if (!sleepTimerTimeEl.value) return;
     const [hours, minutes] = sleepTimerTimeEl.value.split(":").map(Number);

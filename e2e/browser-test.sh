@@ -222,6 +222,12 @@ assert_eq "sleep timer panel opens" "true" "$panel_open"
 time_focused=$(browser eval "document.activeElement === document.getElementById('sleep-timer-time')")
 assert_eq "opening the panel focuses the time field" "true" "$time_focused"
 
+browser eval "document.getElementById('sleep-timer-time').blur()" >/dev/null
+sleep 0.2
+panel_closed_on_blur=$(browser eval "!document.getElementById('sleep-timer-panel').classList.contains('open')")
+assert_eq "blurring the time field closes the panel" "true" "$panel_closed_on_blur"
+
+browser click "#sleep-timer-toggle" >/dev/null
 browser eval "(() => {
 	const target = new Date(Date.now() + 2 * 60 * 1000);
 	const hh = String(target.getHours()).padStart(2, '0');
