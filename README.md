@@ -14,8 +14,9 @@ sleep timer is saved the same way, so it still fires even across a restart.
 
 The sleep timer pauses playback at a chosen clock time instead of sounding
 an alarm: pick a time, and the volume fades out over the last 2 seconds
-before pausing. It's driven by the server, not the browser tab, so it
-still fires even if the phone is asleep or the page is closed.
+before pausing. It repeats every day at that time until removed - it's not
+a one-off. It's driven by the server, not the browser tab, so it still
+fires even if the phone is asleep or the page is closed.
 
 ## How it's built
 
@@ -46,9 +47,12 @@ still fires even if the phone is asleep or the page is closed.
   backend never has to deal with timezones), ticked every 100ms by a
   background thread in `main.rs`. Fades the volume down over the last 2
   seconds, then pauses (only if still playing) and restores the volume.
-  Saved to a `sleep_timer.json` file next to `STATE_FILE` so it survives a
-  restart; a saved timer whose time has already passed is discarded on
-  load instead of firing late.
+  It then repeats: the target time is pushed forward to the same time the
+  next day, so it keeps firing daily until the user cancels it. Saved to a
+  `sleep_timer.json` file next to `STATE_FILE` so it survives a restart; a
+  saved timer whose time has already passed (e.g. the server was down over
+  it) is rolled forward to its next occurrence on load rather than firing
+  late.
 - `src/http.rs` - the web page and a small JSON API (`/api/files`,
   `/api/status`, `/api/play`, `/api/toggle`, `/api/restart`, `/api/loop`,
   `/api/volume`, `/api/sleep-timer`, `/api/sleep-timer/cancel`), plus the

@@ -117,12 +117,14 @@ fn main() -> anyhow::Result<()> {
                 std::thread::sleep(Duration::from_millis(100));
                 let pending = state.sleep_timer.lock().unwrap().take();
                 let Some(pending) = pending else { continue };
-                match sleep_timer::tick(sleep_timer::now_ms(), pending, state.player.as_ref()) {
-                    Some(updated) => *state.sleep_timer.lock().unwrap() = Some(updated),
-                    None => {
-                        sleep_timer::persist(&state.sleep_timer_file, None);
-                        state_store::persist(&state.state_file, &state.player.status());
-                    }
+                let was_pending_at = pending.at;
+                let updated =
+                    sleep_timer::tick(sleep_timer::now_ms(), pending, state.player.as_ref());
+                let fired = updated.at != was_pending_at;
+                *state.sleep_timer.lock().unwrap() = Some(updated);
+                if fired {
+                    sleep_timer::persist(&state.sleep_timer_file, Some(&updated));
+                    state_store::persist(&state.state_file, &state.player.status());
                 }
             }
         });

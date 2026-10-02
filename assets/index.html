@@ -143,11 +143,11 @@
   #sleep-timer-remove svg { width: 12px; height: 12px; }
   #sleep-timer-remove[hidden] { display: none; }
   #sleep-timer-panel {
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    transform: translate(-50%, -6px) scale(0.96);
+    position: fixed;
+    transform: scale(0.96);
+    transform-origin: top center;
     width: min(21rem, calc(100vw - 2.5rem));
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
     align-items: stretch;
@@ -162,10 +162,12 @@
     transition: opacity 0.15s ease, transform 0.15s ease;
     z-index: 900;
   }
-  #sleep-timer-panel.open { opacity: 1; transform: translate(-50%, 0) scale(1); pointer-events: auto; }
+  #sleep-timer-panel.open { opacity: 1; transform: scale(1); pointer-events: auto; }
   #sleep-timer-status { color: var(--text); font-size: 0.8rem; text-align: center; margin: 0; }
   #sleep-timer-time {
     width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
     background: var(--track);
     border: none;
     border-radius: 8px;
@@ -594,8 +596,25 @@
     }
   }
 
+  function positionSleepTimerPanel() {
+    const margin = 12;
+    const toggleRect = sleepTimerToggleEl.getBoundingClientRect();
+    const panelWidth = sleepTimerPanelEl.offsetWidth;
+    let left = toggleRect.left + toggleRect.width / 2 - panelWidth / 2;
+    left = Math.max(margin, Math.min(left, window.innerWidth - panelWidth - margin));
+    sleepTimerPanelEl.style.left = `${left}px`;
+    sleepTimerPanelEl.style.top = `${toggleRect.bottom + 6}px`;
+  }
+
   sleepTimerToggleEl.addEventListener("click", () => {
+    const opening = !sleepTimerPanelEl.classList.contains("open");
+    if (opening) {
+      positionSleepTimerPanel();
+    }
     sleepTimerPanelEl.classList.toggle("open");
+    if (opening) {
+      sleepTimerTimeEl.focus();
+    }
   });
 
   document.addEventListener("click", (e) => {

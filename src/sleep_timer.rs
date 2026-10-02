@@ -8,6 +8,17 @@ use crate::player::Player;
 /// How long the volume fades down for before the timer pauses playback.
 pub const FADE_DURATION_MS: u64 = 2000;
 
+/// The timer repeats daily at the same clock time until the user cancels it.
+const ONE_DAY_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// Pushes `at` forward a day at a time until it's back in the future.
+fn advance_to_future(mut at: u64, now: u64) -> u64 {
+    while at <= now {
+        at += ONE_DAY_MS;
+    }
+    at
+}
+
 /// Guards the write-then-rename in `persist` so two concurrent callers (an
 /// HTTP worker thread and the tick thread) can't interleave writes to the
 /// same temp file.
@@ -44,11 +55,12 @@ pub fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// Advances a pending timer by one tick. Returns `Some(updated)` while it's
-/// still pending (possibly with the fade under way), or `None` once it has
-/// fired - at which point playback has already been paused (if it was
-/// playing) and the volume restored.
-pub fn tick(now: u64, state: TimerState, player: &dyn Player) -> Option<TimerState> {
+/// Advances a pending timer by one tick. The timer repeats every day at the
+/// same clock time - it only goes away when the user cancels it - so this
+/// always returns the timer's next state, never `None`. Once it fires,
+/// playback has already been paused (if it was playing), the volume
+/// restored, and `at` pushed forward to the same time tomorrow.
+pub fn tick(now: u64, state: TimerState, player: &dyn Player) -> TimerState {
     if now >= state.at {
         if player.status().playing {
             player.toggle_play_pause();
@@ -56,7 +68,10 @@ pub fn tick(now: u64, state: TimerState, player: &dyn Player) -> Option<TimerSta
         if let Some(base) = state.fade_base_volume {
             player.set_volume(base);
         }
-        return None;
+        return TimerState {
+            at: advance_to_future(state.at, now),
+            fade_base_volume: None,
+        };
     }
 
     let remaining = state.at - now;
@@ -66,13 +81,13 @@ pub fn tick(now: u64, state: TimerState, player: &dyn Player) -> Option<TimerSta
             .unwrap_or_else(|| player.status().volume);
         let fraction = remaining as f32 / FADE_DURATION_MS as f32;
         player.set_volume(base * fraction);
-        return Some(TimerState {
+        return TimerState {
             at: state.at,
             fade_base_volume: Some(base),
-        });
+        };
     }
 
-    Some(state)
+    state
 }
 
 /// Saves (or, if `state` is `None`, deletes) the sleep timer file. Mirrors
@@ -116,9 +131,11 @@ pub fn persist(path: &Path, state: Option<&TimerState>) {
     }
 }
 
-/// Loads a previously-saved sleep timer. Returns `None` if there isn't one,
-/// it's corrupt, or its target time has already passed (in which case the
-/// stale file is removed rather than firing the timer late on boot).
+/// Loads a previously-saved sleep timer. Returns `None` if there isn't one or
+/// it's corrupt. Since the timer repeats daily until cancelled, one whose
+/// target time has already passed (e.g. the server was down over it) is kept
+/// but rolled forward to the next occurrence, rather than firing late or
+/// being dropped.
 pub fn load(path: &Path, now: u64) -> Option<TimerState> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
@@ -140,8 +157,9 @@ pub fn load(path: &Path, now: u64) -> Option<TimerState> {
         }
     };
     if state.at <= now {
-        let _ = fs::remove_file(path);
-        return None;
+        let advanced = TimerState::new(advance_to_future(state.at, now));
+        persist(path, Some(&advanced));
+        return Some(advanced);
     }
     Some(state)
 }
@@ -164,7 +182,7 @@ mod tests {
         let player = playing_player(0.8);
         let state = TimerState::new(10_000);
         let result = tick(0, state, &player);
-        assert_eq!(result, Some(state));
+        assert_eq!(result, state);
         assert_eq!(player.status().volume, 0.8);
         assert!(player.status().playing);
     }
@@ -174,23 +192,23 @@ mod tests {
         let player = playing_player(0.8);
         let state = TimerState::new(10_000);
 
-        let state = tick(9_000, state, &player).unwrap();
+        let state = tick(9_000, state, &player);
         assert!((player.status().volume - 0.4).abs() < 1e-6);
 
-        tick(9_500, state, &player).unwrap();
+        tick(9_500, state, &player);
         assert!((player.status().volume - 0.2).abs() < 1e-6);
         assert!(player.status().playing);
     }
 
     #[test]
-    fn firing_pauses_and_restores_volume() {
+    fn firing_pauses_restores_volume_and_reschedules_for_tomorrow() {
         let player = playing_player(0.8);
         let state = TimerState::new(10_000);
 
-        let state = tick(9_000, state, &player).unwrap(); // fade starts, base = 0.8
+        let state = tick(9_000, state, &player); // fade starts, base = 0.8
         let result = tick(10_000, state, &player);
 
-        assert_eq!(result, None);
+        assert_eq!(result.at, 10_000 + ONE_DAY_MS);
         assert!(!player.status().playing);
         assert_eq!(player.status().volume, 0.8);
     }
@@ -203,7 +221,7 @@ mod tests {
 
         let result = tick(10_000, state, &player);
 
-        assert_eq!(result, None);
+        assert_eq!(result.at, 10_000 + ONE_DAY_MS);
         assert!(!player.status().playing);
     }
 
@@ -246,14 +264,15 @@ mod tests {
     }
 
     #[test]
-    fn load_discards_a_past_due_timer() {
+    fn load_advances_a_past_due_timer_to_the_next_day() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sleep_timer.json");
         persist(&path, Some(&TimerState::new(10_000)));
 
-        let loaded = load(&path, 20_000);
+        let loaded = load(&path, 20_000).unwrap();
 
-        assert_eq!(loaded, None);
-        assert!(!path.exists());
+        assert_eq!(loaded.at, 10_000 + ONE_DAY_MS);
+        let reloaded = load(&path, 20_000).unwrap();
+        assert_eq!(reloaded.at, loaded.at);
     }
 }

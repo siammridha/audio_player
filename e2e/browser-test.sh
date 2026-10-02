@@ -219,6 +219,8 @@ assert_eq "song2.wav is playing before the sleep timer tests" '"Pause"' "$play_p
 browser click "#sleep-timer-toggle" >/dev/null
 panel_open=$(browser eval "document.getElementById('sleep-timer-panel').classList.contains('open')")
 assert_eq "sleep timer panel opens" "true" "$panel_open"
+time_focused=$(browser eval "document.activeElement === document.getElementById('sleep-timer-time')")
+assert_eq "opening the panel focuses the time field" "true" "$time_focused"
 
 browser eval "(() => {
 	const target = new Date(Date.now() + 2 * 60 * 1000);
@@ -265,7 +267,10 @@ assert_eq "cancelling from the panel clears the sleep timer toggle" "false" "$to
 
 # Set one a couple of seconds out directly through the API (what a
 # minute-granularity pick lands on in practice too) and let the page's
-# existing 1s status poll pick up the pause and the cleared display.
+# existing 1s status poll pick up the pause. The timer repeats daily until
+# the user removes it, so it must still show as active afterwards, just
+# rescheduled for the same time tomorrow (the backend side of the reschedule
+# is also unit-tested).
 at_ms=$(($(date +%s%N) / 1000000 + 2500))
 curl -s -o /dev/null -X POST -H "Content-Type: application/json" \
 	-d "{\"at\":$at_ms}" "http://127.0.0.1:$PORT/api/sleep-timer"
@@ -273,8 +278,12 @@ sleep 4
 
 play_pause=$(browser eval "document.getElementById('play-pause').textContent")
 assert_eq "sleep timer pauses playback once it fires" '"Play"' "$play_pause"
-toggle_off_after_fire=$(browser eval "document.getElementById('sleep-timer-toggle').classList.contains('on')")
-assert_eq "sleep timer display clears once it fires" "false" "$toggle_off_after_fire"
+toggle_on_after_fire=$(browser eval "document.getElementById('sleep-timer-toggle').classList.contains('on')")
+assert_eq "sleep timer stays active (repeating daily) once it fires" "true" "$toggle_on_after_fire"
+next_at=$(curl -s "http://127.0.0.1:$PORT/api/status" | jq '.sleepTimer.at')
+assert_eq "firing reschedules the timer exactly 24h later" "$((at_ms + 86400000))" "$next_at"
+
+curl -s -o /dev/null -X POST "http://127.0.0.1:$PORT/api/sleep-timer/cancel"
 
 # Restart with a timer still pending: it must survive on disk and still be
 # reported in status (the backend side of this is also unit-tested).
