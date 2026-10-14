@@ -1,4 +1,4 @@
-const CACHE = "audio-player-shell-v4";
+const CACHE = "audio-player-shell-v9";
 const SHELL = ["/", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {

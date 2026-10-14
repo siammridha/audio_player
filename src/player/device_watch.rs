@@ -51,6 +51,23 @@ pub fn cards() -> Vec<OutputDevice> {
         .collect()
 }
 
+/// Every ALSA card currently present that has a capture stream on device 0,
+/// in card-number order (so a card plugged in later comes last).
+pub fn capture_cards() -> Vec<OutputDevice> {
+    alsa::card::Iter::new()
+        .filter_map(|c| c.ok())
+        .filter_map(|c| Ctl::from_card(&c, false).ok())
+        .filter(|ctl| ctl.pcm_info(0, 0, alsa::Direction::Capture).is_ok())
+        .filter_map(|ctl| ctl.card_info().ok())
+        .filter_map(|info| {
+            Some(OutputDevice {
+                id: info.get_id().ok()?.to_string(),
+                name: info.get_name().ok()?.to_string(),
+            })
+        })
+        .collect()
+}
+
 /// True if an ALSA card with this short id currently exists.
 pub(crate) fn card_present(id: &str) -> bool {
     cards().iter().any(|c| c.id == id)

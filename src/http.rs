@@ -4,9 +4,10 @@ use std::sync::{Arc, Mutex};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::capture;
 use crate::library;
 use crate::output_device;
-use crate::player::{OutputChoice, Player};
+use crate::player::{Mode, OutputChoice, Player};
 use crate::sleep_timer::{self, TimerState};
 use crate::state_store;
 
@@ -17,6 +18,7 @@ pub struct AppState {
     pub sleep_timer_file: PathBuf,
     pub sleep_timer: Mutex<Option<TimerState>>,
     pub output_device_file: PathBuf,
+    pub capture_device_file: PathBuf,
     pub index_html: &'static str,
     pub manifest: &'static str,
     pub service_worker: &'static str,
@@ -62,6 +64,10 @@ impl Response {
     fn bad_request(msg: &str) -> Self {
         Self::json(400, json!({ "error": msg }))
     }
+
+    fn conflict(msg: &str) -> Self {
+        Self::json(409, json!({ "error": msg }))
+    }
 }
 
 #[derive(Deserialize)]
@@ -90,6 +96,16 @@ struct OutputDeviceRequest {
     device: OutputChoice,
 }
 
+#[derive(Deserialize)]
+struct ModeRequest {
+    mode: Mode,
+}
+
+#[derive(Deserialize)]
+struct CaptureDeviceRequest {
+    device: String,
+}
+
 /// Routes one request to a handler. Kept as a plain function of its inputs
 /// (no tiny_http types) so it can be tested without a real socket.
 pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Response {
@@ -109,11 +125,22 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
         ("GET", "/icon-512.png") => Response::raw("image/png", state.icon_512),
 
         ("GET", "/api/files") => {
-            let files = library::list_files(&state.music_dir);
+            // The page shows the file being recorded on its own, from status.
+            let recording = recording_file(state);
+            let files: Vec<_> = library::list_files(&state.music_dir)
+                .into_iter()
+                .filter(|f| Some(&f.name) != recording.as_ref())
+                .collect();
             Response::json(200, serde_json::to_value(files).unwrap())
         }
 
         ("GET", "/api/status") => status_response(state),
+
+        ("POST", "/api/play" | "/api/toggle" | "/api/restart")
+            if state.player.status().mode == Mode::Capture =>
+        {
+            Response::conflict("not available in Capture mode")
+        }
 
         ("POST", "/api/play") => {
             let Ok(req) = serde_json::from_slice::<PlayRequest>(body) else {
@@ -187,6 +214,9 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
             let Ok(req) = serde_json::from_slice::<OutputDeviceRequest>(body) else {
                 return Response::bad_request("expected { \"device\": \"auto\" | \"<card id>\" }");
             };
+            if recording_file(state).is_some() {
+                return Response::conflict("stop recording first");
+            }
             if let OutputChoice::Card(id) = &req.device
                 && !state.player.output_devices().iter().any(|d| &d.id == id)
             {
@@ -194,6 +224,82 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
             }
             state.player.set_output(req.device.clone());
             output_device::persist(&state.output_device_file, &req.device);
+            status_response(state)
+        }
+
+        ("POST", "/api/mode") => {
+            let Ok(req) = serde_json::from_slice::<ModeRequest>(body) else {
+                return Response::bad_request("expected { \"mode\": \"play\" | \"capture\" }");
+            };
+            if req.mode == Mode::Play && recording_file(state).is_some() {
+                return Response::conflict("stop recording first");
+            }
+            state.player.set_mode(req.mode);
+            save_status(state);
+            status_response(state)
+        }
+
+        ("GET", "/api/capture-devices") => Response::json(
+            200,
+            serde_json::to_value(state.player.capture_devices()).unwrap(),
+        ),
+
+        ("POST", "/api/capture-device") => {
+            let Ok(req) = serde_json::from_slice::<CaptureDeviceRequest>(body) else {
+                return Response::bad_request("expected { \"device\": \"<card id>\" }");
+            };
+            if !state
+                .player
+                .capture_devices()
+                .iter()
+                .any(|d| d.id == req.device)
+            {
+                return Response::bad_request("unknown device");
+            }
+            if recording_file(state).is_some() {
+                return Response::conflict("stop recording first");
+            }
+            state.player.set_capture_device(Some(req.device.clone()));
+            // Stored the same way as the output choice.
+            output_device::persist(&state.capture_device_file, &OutputChoice::Card(req.device));
+            status_response(state)
+        }
+
+        ("POST", "/api/record/start") => {
+            let now = (sleep_timer::now_ms() / 1000) as i64;
+            let path = capture::new_recording_path(&state.music_dir, now);
+            match state.player.start_recording(&path) {
+                Ok(()) => status_response(state),
+                Err(e) => Response::conflict(&e.to_string()),
+            }
+        }
+
+        ("POST", "/api/record/stop") => {
+            state.player.stop_recording();
+            status_response(state)
+        }
+
+        ("POST", "/api/delete") => {
+            let Ok(req) = serde_json::from_slice::<PlayRequest>(body) else {
+                return Response::bad_request("expected { \"file\": \"...\" }");
+            };
+            if !capture::is_recording_name(&req.file) {
+                return Response::bad_request("only recordings can be deleted");
+            }
+            if recording_file(state).as_ref() == Some(&req.file) {
+                return Response::conflict("still recording");
+            }
+            let Some(path) = library::resolve(&state.music_dir, &req.file) else {
+                return Response::bad_request("unknown file");
+            };
+            if state.player.status().file.as_ref() == Some(&req.file) {
+                state.player.unload();
+            }
+            if let Err(e) = std::fs::remove_file(&path) {
+                crate::log::error(&format!("audio-player: failed to delete {}: {e}", req.file));
+                return Response::json(500, json!({ "error": e.to_string() }));
+            }
+            crate::log::info(&format!("audio-player: deleted {}", req.file));
             status_response(state)
         }
 
@@ -208,6 +314,15 @@ fn status_response(state: &AppState) -> Response {
         None => serde_json::Value::Null,
     };
     Response::json(200, value)
+}
+
+fn recording_file(state: &AppState) -> Option<String> {
+    state
+        .player
+        .status()
+        .capture
+        .filter(|c| c.recording)
+        .and_then(|c| c.file)
 }
 
 /// Called by the mutating endpoints after they change the player, not by the
@@ -235,6 +350,7 @@ mod tests {
             sleep_timer_file: dir.path().join("sleep_timer.json"),
             sleep_timer: Mutex::new(None),
             output_device_file: dir.path().join("output_device.json"),
+            capture_device_file: dir.path().join("capture_device.json"),
             index_html: "<html></html>",
             manifest: "{}",
             service_worker: "",
@@ -523,6 +639,176 @@ mod tests {
         let (state, _dir) = test_state();
         handle(&state, "GET", "/api/status", b"");
         assert!(!state.state_file.exists());
+    }
+
+    fn post(state: &AppState, path: &str, body: &[u8]) -> Response {
+        handle(state, "POST", path, body)
+    }
+
+    #[test]
+    fn starts_in_play_mode_without_capture_status() {
+        let (state, _dir) = test_state();
+        let status = json_body(&handle(&state, "GET", "/api/status", b""));
+        assert_eq!(status["mode"], "play");
+        assert_eq!(status["capture"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn capture_mode_pauses_playback_and_shows_the_newest_card() {
+        let (state, _dir) = test_state();
+        post(&state, "/api/play", br#"{"file":"song.mp3"}"#);
+
+        let body = json_body(&post(&state, "/api/mode", br#"{"mode":"capture"}"#));
+        assert_eq!(body["mode"], "capture");
+        assert_eq!(body["playing"], false);
+        assert_eq!(body["capture"]["device"], "Device_1");
+        assert_eq!(body["capture"]["recording"], false);
+
+        let body = json_body(&post(&state, "/api/mode", br#"{"mode":"play"}"#));
+        assert_eq!(body["mode"], "play");
+        assert_eq!(body["playing"], false);
+    }
+
+    #[test]
+    fn mode_rejects_bad_body() {
+        let (state, _dir) = test_state();
+        assert_eq!(post(&state, "/api/mode", br#"{"mode":"nope"}"#).status, 400);
+    }
+
+    #[test]
+    fn playback_controls_are_refused_in_capture_mode() {
+        let (state, _dir) = test_state();
+        post(&state, "/api/mode", br#"{"mode":"capture"}"#);
+        assert_eq!(
+            post(&state, "/api/play", br#"{"file":"song.mp3"}"#).status,
+            409
+        );
+        assert_eq!(post(&state, "/api/toggle", b"").status, 409);
+        assert_eq!(post(&state, "/api/restart", b"").status, 409);
+    }
+
+    #[test]
+    fn lists_capture_devices() {
+        let (state, _dir) = test_state();
+        let resp = handle(&state, "GET", "/api/capture-devices", b"");
+        assert_eq!(resp.status, 200);
+        assert_eq!(
+            json_body(&resp)[1],
+            json!({ "id": "Device_1", "name": "BlueTrm USB PnP Audio Device" })
+        );
+    }
+
+    #[test]
+    fn choosing_a_capture_device_shows_up_in_status_and_is_saved() {
+        let (state, _dir) = test_state();
+        post(&state, "/api/mode", br#"{"mode":"capture"}"#);
+        let body = json_body(&post(
+            &state,
+            "/api/capture-device",
+            br#"{"device":"rt5672"}"#,
+        ));
+        assert_eq!(body["capture"]["device"], "rt5672");
+        assert_eq!(body["capture"]["deviceChoice"], "rt5672");
+        assert_eq!(
+            output_device::load(&state.capture_device_file),
+            OutputChoice::Card("rt5672".to_string())
+        );
+    }
+
+    #[test]
+    fn capture_device_rejects_an_unknown_card() {
+        let (state, _dir) = test_state();
+        let resp = post(&state, "/api/capture-device", br#"{"device":"nope"}"#);
+        assert_eq!(resp.status, 400);
+        assert!(!state.capture_device_file.exists());
+    }
+
+    #[test]
+    fn recording_is_refused_in_play_mode() {
+        let (state, _dir) = test_state();
+        assert_eq!(post(&state, "/api/record/start", b"").status, 409);
+    }
+
+    #[test]
+    fn recording_saves_a_wav_in_the_music_folder() {
+        let (state, _dir) = test_state();
+        post(&state, "/api/mode", br#"{"mode":"capture"}"#);
+
+        let body = json_body(&post(&state, "/api/record/start", b""));
+        assert_eq!(body["capture"]["recording"], true);
+        let file = body["capture"]["file"].as_str().unwrap().to_string();
+        assert!(file.starts_with("capture-") && file.ends_with(".wav"));
+
+        // While recording, the file isn't in the list and nothing that would
+        // interrupt it is allowed.
+        let files = json_body(&handle(&state, "GET", "/api/files", b""));
+        assert!(files.as_array().unwrap().iter().all(|f| f["name"] != file));
+        assert_eq!(post(&state, "/api/record/start", b"").status, 409);
+        assert_eq!(post(&state, "/api/mode", br#"{"mode":"play"}"#).status, 409);
+        assert_eq!(
+            post(&state, "/api/output-device", br#"{"device":"rt5672"}"#).status,
+            409
+        );
+        assert_eq!(
+            post(&state, "/api/capture-device", br#"{"device":"rt5672"}"#).status,
+            409
+        );
+        let delete = format!(r#"{{"file":"{file}"}}"#);
+        assert_eq!(post(&state, "/api/delete", delete.as_bytes()).status, 409);
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let body = json_body(&post(&state, "/api/record/stop", b""));
+        assert_eq!(body["capture"]["recording"], false);
+
+        let files = json_body(&handle(&state, "GET", "/api/files", b""));
+        let saved = files
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == file)
+            .expect("recording is in the file list");
+        assert!(saved["duration"].is_number());
+    }
+
+    #[test]
+    fn deletes_a_recording() {
+        let (state, dir) = test_state();
+        let path = dir.path().join("capture-2026-10-14-14-03.wav");
+        fs::write(&path, b"fake audio").unwrap();
+
+        let resp = post(
+            &state,
+            "/api/delete",
+            br#"{"file":"capture-2026-10-14-14-03.wav"}"#,
+        );
+        assert_eq!(resp.status, 200);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn delete_refuses_anything_but_a_recording() {
+        let (state, dir) = test_state();
+        for body in [
+            &br#"{"file":"song.mp3"}"#[..],
+            br#"{"file":"capture-missing.wav"}"#,
+            br#"{"file":"capture-../song.mp3"}"#,
+            br#"{"file":"capture-notes.txt"}"#,
+            b"not json",
+        ] {
+            assert_eq!(post(&state, "/api/delete", body).status, 400);
+        }
+        assert!(dir.path().join("song.mp3").exists());
+    }
+
+    #[test]
+    fn deleting_the_loaded_track_unloads_it() {
+        let (state, dir) = test_state();
+        fs::write(dir.path().join("capture-a.wav"), b"fake audio").unwrap();
+        post(&state, "/api/play", br#"{"file":"capture-a.wav"}"#);
+
+        let body = json_body(&post(&state, "/api/delete", br#"{"file":"capture-a.wav"}"#));
+        assert!(body["file"].is_null());
+        assert_eq!(body["playing"], false);
     }
 
     #[test]

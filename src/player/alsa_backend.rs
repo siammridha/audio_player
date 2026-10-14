@@ -9,7 +9,11 @@ use alsa::pcm::{Access, Format, HwParams, PCM};
 use alsa::{Direction, ValueOr};
 use rodio::{Decoder, Source};
 
-use super::{OutputChoice, OutputDevice, PersistedState, Player, PlayerStatus, device_watch};
+use super::{
+    CaptureStatus, Mode, OutputChoice, OutputDevice, PersistedState, Player, PlayerStatus,
+    device_watch,
+};
+use crate::capture;
 
 /// ALSA device used in Automatic mode: the external USB sound card the
 /// player is meant to play through, addressed by its ALSA card name
@@ -34,6 +38,12 @@ const PRIMARY_CARD_NAME: &str = "Device";
 pub const DEFAULT_FALLBACK_DEVICE: &str = "plughw:CARD=rt5672,DEV=0";
 
 const CHUNK_FRAMES: usize = 4096;
+/// Smaller chunks and a short device buffer for live sound, so it's heard
+/// with little delay.
+const LIVE_CHUNK_FRAMES: usize = 1024;
+const LIVE_BUFFER_US: u32 = 100_000;
+const LIVE_PERIOD_US: u32 = 20_000;
+const LIVE_ERROR_PAUSE: Duration = Duration::from_millis(500);
 
 type BoxedSource = Box<dyn Source<Item = f32> + Send>;
 
@@ -85,6 +95,9 @@ enum Command {
     /// `SetOutput`, so the feeder re-checks reality instead.
     CardChanged,
     SetOutput(OutputChoice),
+    Unload,
+    /// Capture mode's live sound, played instead of the track while set.
+    Live(Option<BoxedSource>),
 }
 
 /// Playback progress, written only by the feeder thread and read by
@@ -117,6 +130,9 @@ pub struct AlsaPlayer {
     inner: Arc<Mutex<Inner>>,
     playback: Arc<PlaybackState>,
     cmd_tx: mpsc::Sender<Command>,
+    /// Set while in Capture mode.
+    capture: Mutex<Option<capture::Session>>,
+    capture_choice: Arc<Mutex<Option<String>>>,
 }
 
 impl AlsaPlayer {
@@ -178,6 +194,8 @@ impl AlsaPlayer {
             inner,
             playback,
             cmd_tx,
+            capture: Mutex::new(None),
+            capture_choice: Arc::new(Mutex::new(None)),
         }))
     }
 
@@ -215,6 +233,12 @@ impl AlsaPlayer {
             .send(Command::Play(path.to_path_buf(), source, initial_frames))
             .ok()?;
         Some(duration)
+    }
+
+    fn is_playing(&self) -> bool {
+        self.inner.lock().unwrap().track.is_some()
+            && self.playback.active.load(Ordering::Relaxed)
+            && !self.playback.paused.load(Ordering::Relaxed)
     }
 }
 
@@ -291,6 +315,11 @@ impl Player for AlsaPlayer {
         }
     }
 
+    fn unload(&self) {
+        self.inner.lock().unwrap().track = None;
+        let _ = self.cmd_tx.send(Command::Unload);
+    }
+
     fn output_devices(&self) -> Vec<OutputDevice> {
         device_watch::cards()
     }
@@ -300,11 +329,76 @@ impl Player for AlsaPlayer {
         let _ = self.cmd_tx.send(Command::SetOutput(choice));
     }
 
+    fn set_mode(&self, mode: Mode) {
+        let mut session = self.capture.lock().unwrap();
+        match mode {
+            Mode::Capture if session.is_none() => {
+                // Set here rather than sent to the feeder, so the status
+                // returned (and saved) right after already says paused.
+                if self.is_playing() {
+                    self.playback.paused.store(true, Ordering::Relaxed);
+                    crate::log::info("audio-player: paused playback");
+                }
+                let live_tx = self.cmd_tx.clone();
+                *session = Some(capture::Session::start(
+                    Arc::clone(&self.capture_choice),
+                    move |source| {
+                        let _ = live_tx.send(Command::Live(Some(Box::new(source))));
+                    },
+                ));
+                crate::log::info("audio-player: switched to Capture mode");
+            }
+            Mode::Play if session.is_some() => {
+                // Dropping the session stops capturing and finishes any
+                // recording.
+                *session = None;
+                let _ = self.cmd_tx.send(Command::Live(None));
+                crate::log::info("audio-player: switched to Play mode");
+            }
+            _ => {}
+        }
+    }
+
+    fn capture_devices(&self) -> Vec<OutputDevice> {
+        device_watch::capture_cards()
+    }
+
+    fn set_capture_device(&self, id: Option<String>) {
+        *self.capture_choice.lock().unwrap() = id;
+        if let Some(session) = self.capture.lock().unwrap().as_ref() {
+            session.reopen();
+        }
+    }
+
+    fn start_recording(&self, path: &Path) -> anyhow::Result<()> {
+        match self.capture.lock().unwrap().as_ref() {
+            Some(session) => session.start_recording(path),
+            None => anyhow::bail!("not in Capture mode"),
+        }
+    }
+
+    fn stop_recording(&self) {
+        if let Some(session) = self.capture.lock().unwrap().as_ref() {
+            session.stop_recording();
+        }
+    }
+
     fn status(&self) -> PlayerStatus {
+        let capture = self.capture.lock().unwrap().as_ref().map(|session| {
+            let snap = session.snapshot();
+            CaptureStatus {
+                device: snap.card.as_ref().map(|c| c.id.clone()),
+                device_name: snap.card.map(|c| c.name),
+                device_choice: self.capture_choice.lock().unwrap().clone(),
+                recording: snap.recording.is_some(),
+                file: snap.recording,
+                elapsed: snap.elapsed,
+                bytes: snap.bytes,
+                level: snap.level,
+            }
+        });
+        let playing = self.is_playing();
         let inner = self.inner.lock().unwrap();
-        let playing = inner.track.is_some()
-            && self.playback.active.load(Ordering::Relaxed)
-            && !self.playback.paused.load(Ordering::Relaxed);
         let position = if inner.track.is_some() {
             let rate = self.playback.sample_rate.load(Ordering::Relaxed);
             let frames = self.playback.frames_written.load(Ordering::Relaxed);
@@ -336,6 +430,12 @@ impl Player for AlsaPlayer {
                 .clone()
                 .unwrap_or_else(|| "built-in".to_string()),
             output_choice: inner.output_choice.clone(),
+            mode: if capture.is_some() {
+                Mode::Capture
+            } else {
+                Mode::Play
+            },
+            capture,
         }
     }
 }
@@ -357,7 +457,22 @@ struct Output {
     pcm: PCM,
     /// The device string `pcm` was opened with.
     device: String,
-    configured: Option<(u32, u16)>,
+    configured: Option<Setup>,
+}
+
+/// What the device is set up for: rate, channel count, and whether it's
+/// tuned for live sound.
+type Setup = (u32, u16, bool);
+
+/// The source the feeder plays from: the live sound when set, otherwise the
+/// track. The flag says which.
+fn active<'a>(
+    live: &'a Option<BoxedSource>,
+    current: &'a Option<(PathBuf, BoxedSource)>,
+) -> Option<(&'a BoxedSource, bool)> {
+    live.as_ref()
+        .map(|s| (s, true))
+        .or_else(|| current.as_ref().map(|(_, s)| (s, false)))
 }
 
 /// Everything the feeder thread owns besides the current track.
@@ -376,7 +491,7 @@ struct Feeder {
 impl Feeder {
     /// Plays through the target card if it's present, otherwise the
     /// built-in fallback.
-    fn follow_target(&mut self, current: &Option<(PathBuf, BoxedSource)>) {
+    fn follow_target(&mut self, current: Option<(&BoxedSource, bool)>) {
         // Checked right before opening: closes the gap between the
         // watcher's last confirmation and this exact moment.
         if device_watch::card_present(&self.target.card) {
@@ -390,14 +505,14 @@ impl Feeder {
     }
 
     /// Makes `device` the active output (`card` is `None` for the built-in
-    /// fallback) and carries on with the current track mid-way. Doesn't
+    /// fallback) and carries on with the current source mid-way. Doesn't
     /// reopen a device that's already open, since a `hw` device can only be
     /// opened once at a time.
     fn switch_to(
         &mut self,
         device: &str,
         card: Option<String>,
-        current: &Option<(PathBuf, BoxedSource)>,
+        current: Option<(&BoxedSource, bool)>,
     ) {
         if self.output.device != device {
             match PCM::new(device, Direction::Playback, false) {
@@ -405,12 +520,7 @@ impl Feeder {
                     self.output.pcm = pcm;
                     self.output.device = device.to_string();
                     self.output.configured = None;
-                    reconfigure_for_current(
-                        &self.output.pcm,
-                        current,
-                        &mut self.output.configured,
-                        &self.playback,
-                    );
+                    reconfigure_for_current(&mut self.output, current, &self.playback);
                 }
                 Err(e) => {
                     crate::log::error(&format!(
@@ -436,16 +546,17 @@ impl Feeder {
 
 /// Runs for the life of the process. This thread is the only thing that
 /// ever touches the ALSA device: it applies commands from `Player` trait
-/// methods, pulls samples from the current track and writes them to the
-/// device, and notices when a track ends so it can replay it if looping is
-/// on.
+/// methods, pulls samples from the current track (or Capture mode's live
+/// sound) and writes them to the device, and notices when a track ends so it
+/// can replay it if looping is on.
 fn feeder_loop(mut feeder: Feeder, cmd_rx: mpsc::Receiver<Command>) {
     let playback = Arc::clone(&feeder.playback);
     let inner = Arc::clone(&feeder.inner);
     let mut current: Option<(PathBuf, BoxedSource)> = None;
+    let mut live: Option<BoxedSource> = None;
 
     loop {
-        let idle = current.is_none() || playback.paused.load(Ordering::Relaxed);
+        let idle = live.is_none() && (current.is_none() || playback.paused.load(Ordering::Relaxed));
         let cmd = if idle {
             cmd_rx.recv_timeout(Duration::from_millis(300))
         } else {
@@ -457,20 +568,17 @@ fn feeder_loop(mut feeder: Feeder, cmd_rx: mpsc::Receiver<Command>) {
 
         match cmd {
             Ok(Command::Play(path, source, initial_frames)) => {
-                let rate = source.sample_rate().get();
-                let channels = source.channels().get();
-                if feeder.output.configured != Some((rate, channels)) {
-                    if let Err(e) = configure(&feeder.output.pcm, rate, channels) {
-                        crate::log::error(&format!(
-                            "audio-player: failed to configure ALSA device: {e}"
-                        ));
-                        current = None;
-                        playback.active.store(false, Ordering::Relaxed);
-                        continue;
-                    }
-                    feeder.output.configured = Some((rate, channels));
+                if let Err(e) = ensure_configured(&mut feeder.output, &source, false) {
+                    crate::log::error(&format!(
+                        "audio-player: failed to configure ALSA device: {e}"
+                    ));
+                    current = None;
+                    playback.active.store(false, Ordering::Relaxed);
+                    continue;
                 }
-                playback.sample_rate.store(rate, Ordering::Relaxed);
+                playback
+                    .sample_rate
+                    .store(source.sample_rate().get(), Ordering::Relaxed);
                 playback
                     .frames_written
                     .store(initial_frames, Ordering::Relaxed);
@@ -485,9 +593,15 @@ fn feeder_loop(mut feeder: Feeder, cmd_rx: mpsc::Receiver<Command>) {
                 continue;
             }
             Ok(Command::TogglePlayPause) => {
-                if current.is_some() {
+                if let Some((_, source)) = &current {
                     let was_paused = playback.paused.fetch_xor(true, Ordering::Relaxed);
                     if was_paused {
+                        // The device may still be set up for live sound.
+                        if let Err(e) = ensure_configured(&mut feeder.output, source, false) {
+                            crate::log::error(&format!(
+                                "audio-player: failed to configure ALSA device: {e}"
+                            ));
+                        }
                         let _ = feeder.output.pcm.prepare();
                         crate::log::info("audio-player: resumed playback");
                     } else {
@@ -497,17 +611,51 @@ fn feeder_loop(mut feeder: Feeder, cmd_rx: mpsc::Receiver<Command>) {
                 continue;
             }
             Ok(Command::CardChanged) => {
-                feeder.follow_target(&current);
+                feeder.follow_target(active(&live, &current));
                 continue;
             }
             Ok(Command::SetOutput(choice)) => {
                 feeder.target = Target::for_choice(&choice, &feeder.auto_device);
                 *feeder.watched_card.lock().unwrap() = feeder.target.card.clone();
-                feeder.follow_target(&current);
+                feeder.follow_target(active(&live, &current));
+                continue;
+            }
+            Ok(Command::Unload) => {
+                current = None;
+                playback.active.store(false, Ordering::Relaxed);
+                continue;
+            }
+            Ok(Command::Live(source)) => {
+                if let Some(source) = &source
+                    && let Err(e) = ensure_configured(&mut feeder.output, source, true)
+                {
+                    crate::log::error(&format!(
+                        "audio-player: failed to configure ALSA device for live sound: {e}"
+                    ));
+                }
+                live = source;
                 continue;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+
+        let volume = f32::from_bits(playback.volume_bits.load(Ordering::Relaxed));
+
+        if let Some(source) = live.as_mut() {
+            let channels = source.channels().get() as usize;
+            let buf: Vec<i16> = source
+                .by_ref()
+                .take(LIVE_CHUNK_FRAMES * channels)
+                .map(|s| to_i16(s, volume))
+                .collect();
+            if buf.is_empty() {
+                live = None;
+            } else if let Err(e) = write_i16(&feeder.output.pcm, &buf) {
+                crate::log::error(&format!("audio-player: ALSA write error: {e}"));
+                thread::sleep(LIVE_ERROR_PAUSE);
+            }
+            continue;
         }
 
         let Some((path, source)) = current.as_mut() else {
@@ -518,11 +666,10 @@ fn feeder_loop(mut feeder: Feeder, cmd_rx: mpsc::Receiver<Command>) {
         }
 
         let channels = source.channels().get() as usize;
-        let volume = f32::from_bits(playback.volume_bits.load(Ordering::Relaxed));
         let buf: Vec<i16> = source
             .by_ref()
             .take(CHUNK_FRAMES * channels)
-            .map(|s| (s.clamp(-1.0, 1.0) * volume * i16::MAX as f32) as i16)
+            .map(|s| to_i16(s, volume))
             .collect();
 
         if buf.is_empty() {
@@ -553,11 +700,26 @@ fn feeder_loop(mut feeder: Feeder, cmd_rx: mpsc::Receiver<Command>) {
     }
 }
 
-/// Negotiates hardware/software params for a track's rate and channel
+fn to_i16(sample: f32, volume: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * volume * i16::MAX as f32) as i16
+}
+
+/// Sets the device up for `source` unless it already is.
+fn ensure_configured(output: &mut Output, source: &BoxedSource, live: bool) -> alsa::Result<()> {
+    let setup = (source.sample_rate().get(), source.channels().get(), live);
+    if output.configured != Some(setup) {
+        configure(&output.pcm, setup)?;
+        output.configured = Some(setup);
+    }
+    Ok(())
+}
+
+/// Negotiates hardware/software params for a source's rate and channel
 /// count, and primes the device to start playing as soon as one period's
 /// worth of samples has been written (rather than waiting to fill the
-/// whole buffer, which would add startup latency).
-fn configure(pcm: &PCM, rate: u32, channels: u16) -> alsa::Result<()> {
+/// whole buffer, which would add startup latency). Live sound also gets a
+/// short buffer, since the buffer's length is how late it's heard.
+fn configure(pcm: &PCM, (rate, channels, live): Setup) -> alsa::Result<()> {
     // Ignore errors: this fails if the device was never started, which is
     // fine - there's nothing to drop yet.
     let _ = pcm.drop();
@@ -567,6 +729,10 @@ fn configure(pcm: &PCM, rate: u32, channels: u16) -> alsa::Result<()> {
     hwp.set_format(Format::s16())?;
     hwp.set_channels(channels as u32)?;
     hwp.set_rate(rate, ValueOr::Nearest)?;
+    if live {
+        hwp.set_buffer_time_near(LIVE_BUFFER_US, ValueOr::Nearest)?;
+        hwp.set_period_time_near(LIVE_PERIOD_US, ValueOr::Nearest)?;
+    }
     pcm.hw_params(&hwp)?;
 
     let period = pcm.hw_params_current()?.get_period_size()?;
@@ -577,27 +743,25 @@ fn configure(pcm: &PCM, rate: u32, channels: u16) -> alsa::Result<()> {
     pcm.prepare()
 }
 
-/// If a track is currently loaded, negotiates hw params for it on `pcm` - a
-/// freshly-opened handle after a device switch - and primes it to keep
-/// playing mid-track. Leaves `frames_written` alone, so the reported
-/// position stays continuous across the switch instead of jumping back to
-/// zero.
+/// If something is playing, negotiates hw params for it on a freshly-opened
+/// handle after a device switch, and primes it to keep playing mid-way.
+/// Leaves `frames_written` alone, so the reported position stays continuous
+/// across the switch instead of jumping back to zero.
 fn reconfigure_for_current(
-    pcm: &PCM,
-    current: &Option<(PathBuf, BoxedSource)>,
-    configured: &mut Option<(u32, u16)>,
+    output: &mut Output,
+    current: Option<(&BoxedSource, bool)>,
     playback: &PlaybackState,
 ) {
-    let Some((_, source)) = current else {
+    let Some((source, live)) = current else {
         return;
     };
-    let rate = source.sample_rate().get();
-    let channels = source.channels().get();
-    match configure(pcm, rate, channels) {
-        Ok(()) => {
-            *configured = Some((rate, channels));
-            playback.sample_rate.store(rate, Ordering::Relaxed);
+    match ensure_configured(output, source, live) {
+        Ok(()) if !live => {
+            playback
+                .sample_rate
+                .store(source.sample_rate().get(), Ordering::Relaxed);
         }
+        Ok(()) => {}
         Err(e) => {
             crate::log::error(&format!(
                 "audio-player: failed to configure ALSA device after switch: {e}"

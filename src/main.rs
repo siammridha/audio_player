@@ -1,3 +1,4 @@
+mod capture;
 mod http;
 mod library;
 mod log;
@@ -11,9 +12,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use player::Player;
 use player::alsa_backend::AlsaPlayer;
 use player::mock_backend::MockPlayer;
+use player::{Mode, OutputChoice, Player};
 use tiny_http::Server;
 
 const INDEX_HTML: &str = include_str!("../assets/index.html");
@@ -66,6 +67,12 @@ fn main() -> anyhow::Result<()> {
         AlsaPlayer::new(&device, &fallback_device, output_choice)?
     };
 
+    let capture_device_file = state_file.with_file_name("capture_device.json");
+    player.set_capture_device(match output_device::load(&capture_device_file) {
+        OutputChoice::Card(id) => Some(id),
+        OutputChoice::Auto => None,
+    });
+
     if let Some(snapshot) = state_store::load(&state_file) {
         match library::resolve(&music_dir, &snapshot.file) {
             Some(path) => player.restore(&path, &snapshot),
@@ -86,6 +93,7 @@ fn main() -> anyhow::Result<()> {
         sleep_timer_file,
         sleep_timer: Mutex::new(initial_sleep_timer),
         output_device_file,
+        capture_device_file,
         index_html: INDEX_HTML,
         manifest: MANIFEST,
         service_worker: SERVICE_WORKER,
@@ -118,6 +126,11 @@ fn main() -> anyhow::Result<()> {
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_millis(100));
+                // Nothing to pause in Capture mode, and fading would quiet
+                // the live sound.
+                if state.player.status().mode == Mode::Capture {
+                    continue;
+                }
                 let pending = state.sleep_timer.lock().unwrap().take();
                 let Some(pending) = pending else { continue };
                 let was_pending_at = pending.at;

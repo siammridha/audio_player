@@ -80,6 +80,16 @@ the one you're listening on. The web page itself also shows this, in the
 pill under the title ("Playing through USB PnP Sound Device" / "Playing
 through built-in speaker").
 
+**Capture mode:** swipe the page left to record from a capture card into
+`/var/lib/audio-player/audio`. Recordings are plain WAV and take about
+11.5 MB per minute in stereo (half that from a mono card). The device's
+disk has under 1 GB free, so that's roughly 80 minutes; a recording stops
+on its own when less than 50 MB is left. The picked capture card is saved
+in `/var/lib/audio-player/capture_device.json`. At the `INFO` level the log
+shows `switched to Capture mode`, `capturing from the <id> sound card
+(48000 Hz, <n> ch)`, `recording to <file>` and `saved recording <file>`. Recordings can be deleted from the page (swipe
+the row left); that logs `deleted <file>`.
+
 **Log level:** a normal install (`deploy/install.sh`) sets the service to
 `RUST_LOG=error`, so only failures are logged - the lines above stay
 silent unless you turn it up. To see them (or `DEBUG`-level detail, like

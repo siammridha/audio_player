@@ -305,4 +305,108 @@ sleep 1.3
 choice=$(browser eval "document.getElementById('output-choice').value")
 assert_eq "the picked card survives a restart" '"rt5672"' "$choice"
 
+# --- Capture mode ---
+# A swipe is a horizontal scroll of the #modes strip, so scrolling it from
+# code fires the same events a finger would. The mock backend reports two
+# fake capture cards and writes a real silent WAV when a recording stops.
+
+swipe_to() {
+	browser eval "(() => { const el = document.getElementById('modes'); el.scrollTo({ left: $1 * el.clientWidth, behavior: 'instant' }); })()" >/dev/null
+	sleep 0.8
+}
+
+curl -s -o /dev/null -X POST -H "Content-Type: application/json" \
+	-d '{"file":"song2.wav"}' "http://127.0.0.1:$PORT/api/play"
+swipe_to 1
+status=$(curl -s "http://127.0.0.1:$PORT/api/status")
+assert_eq "swiping left switches the server to Capture mode" "capture" "$(echo "$status" | jq -r '.mode')"
+assert_eq "entering Capture mode pauses the track" "false" "$(echo "$status" | jq '.playing')"
+
+label=$(browser eval "document.getElementById('capture-device-label').textContent")
+assert_eq "capture pill names the newest capture card" '"Recording from BlueTrm USB PnP Audio Device"' "$label"
+sleep_timer_hidden=$(browser eval "document.getElementById('sleep-timer').hidden")
+assert_eq "the sleep timer is hidden in Capture mode" "true" "$sleep_timer_hidden"
+files_disabled=$(browser eval "Array.from(document.querySelectorAll('#files button')).every(b => b.disabled)")
+assert_eq "files can't be played from Capture mode" "true" "$files_disabled"
+level=$(browser eval "document.getElementById('level-fill').style.width")
+[ "$level" != '"0%"' ] && echo "ok: the input level meter moves" || { echo "FAIL: input level meter stayed at 0%"; exit 1; }
+
+options=$(browser eval "Array.from(document.querySelectorAll('#capture-choice option')).map(o => o.textContent).join(',')")
+assert_eq "capture picker lists every capture card" '"sof-rt5672,BlueTrm USB PnP Audio Device"' "$options"
+browser eval "(() => {
+	const el = document.getElementById('capture-choice');
+	el.value = 'rt5672';
+	el.dispatchEvent(new Event('change', { bubbles: true }));
+})()" >/dev/null
+sleep 0.3
+capture_device=$(curl -s "http://127.0.0.1:$PORT/api/status" | jq -r '.capture.device')
+assert_eq "picking a capture card sends it to the server" "rt5672" "$capture_device"
+
+browser click "#record" >/dev/null
+sleep 1.2
+recording_file=$(curl -s "http://127.0.0.1:$PORT/api/status" | jq -r '.capture.file')
+echo "$recording_file" | grep -qE '^capture-[0-9]{4}(-[0-9]{2}){4}\.wav$' && echo "ok: recording starts with a dated file name" || { echo "FAIL: unexpected recording file [$recording_file]"; exit 1; }
+first_row=$(browser eval "document.querySelector('#files li').id")
+assert_eq "the recording sits at the top of the file list" '"recording-row"' "$first_row"
+size=$(browser eval "document.querySelector('#recording-row .dur').textContent")
+echo "$size" | grep -q 'MB' && echo "ok: the recording row shows its size in MB" || { echo "FAIL: recording row size is [$size]"; exit 1; }
+modes_locked=$(browser eval "document.getElementById('modes').classList.contains('locked')")
+assert_eq "swiping is locked while recording" "true" "$modes_locked"
+output_disabled=$(browser eval "document.getElementById('output-choice').disabled")
+assert_eq "the output picker is off while recording" "true" "$output_disabled"
+record_label=$(browser eval "document.getElementById('record').getAttribute('aria-label')")
+assert_eq "the record button becomes a stop button" '"Stop recording"' "$record_label"
+
+swipe_to 0
+mode=$(curl -s "http://127.0.0.1:$PORT/api/status" | jq -r '.mode')
+assert_eq "Play mode is refused while recording" "capture" "$mode"
+
+browser click "#record" >/dev/null
+sleep 0.8
+row_gone=$(browser eval "document.getElementById('recording-row') === null")
+assert_eq "stopping removes the recording row" "true" "$row_gone"
+duration=$(browser eval "document.querySelector('#files button[data-name=\"$recording_file\"] .dur').textContent")
+echo "$duration" | grep -qE '^"0:0[0-9]"$' && echo "ok: the saved recording shows its length" || { echo "FAIL: saved recording duration is [$duration]"; exit 1; }
+[ -f "$MUSIC_DIR/$recording_file" ] && echo "ok: the recording is saved in the music folder" || { echo "FAIL: $recording_file not in the music folder"; exit 1; }
+
+swipe_to 0
+mode=$(curl -s "http://127.0.0.1:$PORT/api/status" | jq -r '.mode')
+assert_eq "swiping right goes back to Play mode" "play" "$mode"
+sleep_timer_hidden=$(browser eval "document.getElementById('sleep-timer').hidden")
+assert_eq "the sleep timer is back in Play mode" "false" "$sleep_timer_hidden"
+
+# --- Deleting a recording ---
+# Drags a row left with pointer events, like a finger swipe. (agent-browser's
+# `mouse down` always lands at 0,0, so the real mouse can't do this.)
+drag_row_left() {
+	browser eval "(() => {
+		const row = document.querySelector('#files button[data-name=\"$1\"]');
+		const r = row.getBoundingClientRect();
+		const y = r.y + r.height / 2;
+		const fire = (type, x) => row.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: y }));
+		const x = r.x + r.width / 2;
+		fire('pointerdown', x);
+		for (const step of [30, 60, 90, 120]) fire('pointermove', x - step);
+		fire('pointerup', x - 120);
+		row.click();
+	})()" >/dev/null
+	sleep 0.4
+}
+
+has_delete=$(browser eval "document.querySelector('#files button[data-name=\"song2.wav\"]').parentElement.querySelector('.delete') !== null")
+assert_eq "only recordings can be deleted" "false" "$has_delete"
+
+drag_row_left "$recording_file"
+offset=$(browser eval "document.querySelector('#files button[data-name=\"$recording_file\"]').parentElement.dataset.offset")
+assert_eq "swiping a recording left shows Delete" '"-88"' "$offset"
+playing_file=$(curl -s "http://127.0.0.1:$PORT/api/status" | jq -r '.file')
+assert_eq "swiping a row doesn't play it" "song2.wav" "$playing_file"
+
+browser eval "window.confirm = () => true" >/dev/null
+browser click "#files li.swipe .delete" >/dev/null
+sleep 0.5
+in_list=$(browser eval "document.querySelector('#files button[data-name=\"$recording_file\"]') !== null")
+assert_eq "a deleted recording leaves the list" "false" "$in_list"
+[ ! -e "$MUSIC_DIR/$recording_file" ] && echo "ok: a deleted recording leaves the music folder" || { echo "FAIL: $recording_file still in the music folder"; exit 1; }
+
 echo "All browser checks passed."

@@ -1,9 +1,15 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use super::{OutputChoice, OutputDevice, PersistedState, Player, PlayerStatus};
+use super::{
+    CaptureStatus, Mode, OutputChoice, OutputDevice, PersistedState, Player, PlayerStatus,
+};
 use crate::library;
+
+/// The format the mock pretends to record in.
+const MOCK_RATE: u32 = 48_000;
+const MOCK_CHANNELS: u16 = 2;
 
 struct State {
     file: Option<String>,
@@ -16,6 +22,10 @@ struct State {
     /// Set while "playing"; position is elapsed_base plus time since this.
     running_since: Option<Instant>,
     output_choice: OutputChoice,
+    mode: Mode,
+    capture_choice: Option<String>,
+    /// The file being "recorded" and when it started.
+    recording: Option<(PathBuf, Instant)>,
 }
 
 /// In-memory stand-in for `AlsaPlayer`, used wherever there's no sound card
@@ -36,9 +46,45 @@ impl MockPlayer {
                 elapsed_base: 0.0,
                 running_since: None,
                 output_choice: OutputChoice::Auto,
+                mode: Mode::Play,
+                capture_choice: None,
+                recording: None,
             }),
         }
     }
+}
+
+/// Stand-ins for the real device's BlueTrm USB input and built-in chip.
+fn mock_capture_devices() -> Vec<OutputDevice> {
+    vec![
+        OutputDevice {
+            id: "rt5672".to_string(),
+            name: "sof-rt5672".to_string(),
+        },
+        OutputDevice {
+            id: "Device_1".to_string(),
+            name: "BlueTrm USB PnP Audio Device".to_string(),
+        },
+    ]
+}
+
+/// Writes a real silent WAV, so the recording shows up in the file list
+/// with a length.
+fn write_silent_wav(path: &Path, seconds: f64) {
+    let spec = hound::WavSpec {
+        channels: MOCK_CHANNELS,
+        sample_rate: MOCK_RATE,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let Ok(mut writer) = hound::WavWriter::create(path, spec) else {
+        return;
+    };
+    let samples = (seconds * MOCK_RATE as f64) as usize * MOCK_CHANNELS as usize;
+    for _ in 0..samples {
+        let _ = writer.write_sample(0i16);
+    }
+    let _ = writer.finalize();
 }
 
 impl Player for MockPlayer {
@@ -91,6 +137,14 @@ impl Player for MockPlayer {
     }
 
     /// Stand-ins for the real device's USB card and built-in sound chip.
+    fn unload(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.file = None;
+        state.duration = None;
+        state.elapsed_base = 0.0;
+        state.running_since = None;
+    }
+
     fn output_devices(&self) -> Vec<OutputDevice> {
         vec![
             OutputDevice {
@@ -106,6 +160,46 @@ impl Player for MockPlayer {
 
     fn set_output(&self, choice: OutputChoice) {
         self.state.lock().unwrap().output_choice = choice;
+    }
+
+    fn set_mode(&self, mode: Mode) {
+        if mode == Mode::Play {
+            self.stop_recording();
+        }
+        let mut state = self.state.lock().unwrap();
+        if mode == Mode::Capture
+            && let Some(since) = state.running_since.take()
+        {
+            state.elapsed_base += since.elapsed().as_secs_f64();
+        }
+        state.mode = mode;
+    }
+
+    fn capture_devices(&self) -> Vec<OutputDevice> {
+        mock_capture_devices()
+    }
+
+    fn set_capture_device(&self, id: Option<String>) {
+        self.state.lock().unwrap().capture_choice = id;
+    }
+
+    fn start_recording(&self, path: &Path) -> anyhow::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        if state.mode != Mode::Capture {
+            anyhow::bail!("not in Capture mode");
+        }
+        if state.recording.is_some() {
+            anyhow::bail!("already recording");
+        }
+        state.recording = Some((path.to_path_buf(), Instant::now()));
+        Ok(())
+    }
+
+    fn stop_recording(&self) {
+        let recording = self.state.lock().unwrap().recording.take();
+        if let Some((path, since)) = recording {
+            write_silent_wav(&path, since.elapsed().as_secs_f64());
+        }
     }
 
     fn status(&self) -> PlayerStatus {
@@ -124,7 +218,44 @@ impl Player for MockPlayer {
             volume: state.volume,
             output: "mock".to_string(),
             output_choice: state.output_choice.clone(),
+            mode: state.mode,
+            capture: (state.mode == Mode::Capture).then(|| capture_status(&state)),
         }
+    }
+}
+
+fn capture_status(state: &State) -> CaptureStatus {
+    let devices = mock_capture_devices();
+    let card = state
+        .capture_choice
+        .as_ref()
+        .and_then(|id| devices.iter().find(|d| &d.id == id))
+        .or(devices.last())
+        .cloned();
+    let elapsed = state
+        .recording
+        .as_ref()
+        .map(|(_, since)| since.elapsed().as_secs_f64())
+        .unwrap_or(0.0);
+    let bytes = if state.recording.is_some() {
+        44 + (elapsed * MOCK_RATE as f64) as u64 * MOCK_CHANNELS as u64 * 2
+    } else {
+        0
+    };
+    // Moves on its own, so the level meter can be seen working.
+    let wobble = (crate::sleep_timer::now_ms() as f64 / 300.0).sin() as f32;
+    CaptureStatus {
+        device: card.as_ref().map(|c| c.id.clone()),
+        device_name: card.map(|c| c.name),
+        device_choice: state.capture_choice.clone(),
+        recording: state.recording.is_some(),
+        file: state
+            .recording
+            .as_ref()
+            .and_then(|(path, _)| path.file_name().map(|n| n.to_string_lossy().into_owned())),
+        elapsed,
+        bytes,
+        level: 0.4 + 0.2 * wobble,
     }
 }
 

@@ -6,7 +6,8 @@ when it's plugged in, falling back to the device's own built-in speaker
 otherwise. A web page (dark background, orange accents) served on port 3000 is
 the remote control: pick a file, play/pause, loop (on by default), start
 over, adjust volume, set a sleep timer, and pick which sound card to play
-through (see below). It's a PWA, so it can be
+through (see below). It can also record from a capture card (Capture mode,
+below). It's a PWA, so it can be
 installed to a phone's home screen ("Add to Home Screen" in the browser
 menu) and launches full-screen like an app. Playback state (track,
 position, volume, loop, play/pause) is saved to disk as it changes, so a
@@ -32,6 +33,32 @@ an `output_device.json` file next to `STATE_FILE`, so it survives a
 restart. The list has no "Automatic" entry; to go back to it, delete
 `output_device.json` and restart the service.
 
+Swiping the middle of the page left switches to Capture mode, and swiping
+right goes back to Play mode. The mode is held by the server, so every
+phone shows the same one, and the player always starts in Play mode after a
+restart. In Capture mode:
+
+- The track is paused, and the sound from the capture card plays live
+  through the current output. The volume slider sets how loud that is; it
+  doesn't change the recording.
+- The "Recording from ..." pill picks the capture card from every card that
+  can record (USB inputs and the built-in one). Until one is picked, or
+  while the picked one is missing, the newest card that can record is used.
+  The choice is saved to `capture_device.json` next to `STATE_FILE`.
+- The record button saves a WAV file named `capture-YYYY-MM-DD-HH-MM.wav`
+  (local time) into the music folder, at 48 kHz, 16-bit, with the card's own
+  channel count. While recording, it shows at the top of the file list with
+  its size, and swiping, the output picker and the capture picker are
+  locked. Once stopped, it's a normal file in the list.
+- A recording stops on its own (and is kept) when the disk has less than
+  50 MB free, or when the capture card is unplugged. Its WAV header is
+  updated every second, so the file stays playable after a power cut.
+- The sleep timer is hidden and does nothing.
+
+Recordings can be deleted: swipe a `capture-...` row left to show a red
+Delete button, tap it, and confirm. Other audio files can't be deleted from
+the page. Deleting the track that's loaded stops it first.
+
 ## How it's built
 
 - `src/player/` - a `Player` trait with two implementations:
@@ -53,6 +80,12 @@ restart. The list has no "Automatic" entry; to go back to it, delete
     5-second settle delay (re-checked after the wait) before anything opens
     it; a disappearing card is acted on immediately.
   - `mock_backend.rs` - in-memory only, no sound card needed. Used by tests.
+    Pretends to have two capture cards, and writes a real silent WAV when a
+    recording stops.
+- `src/capture.rs` - Capture mode: a thread that reads the capture card,
+  keeps the input level, hands the sound to the playback thread for live
+  listening (with a short output buffer so the delay stays small), and
+  writes the WAV file while recording.
 - `src/state_store.rs` - saves/loads the `STATE_FILE` JSON snapshot (track,
   position, volume, loop, play/pause) used to restore playback after a
   restart. Saved on every play/toggle/restart/loop/volume change, and every
@@ -71,11 +104,14 @@ restart. The list has no "Automatic" entry; to go back to it, delete
   late.
 - `src/output_device.rs` - saves/loads the output choice (`"auto"` or a card
   id) in `output_device.json` next to `STATE_FILE`. A missing or corrupt
-  file means Automatic.
+  file means Automatic. The capture card choice is saved the same way, in
+  `capture_device.json`.
 - `src/http.rs` - the web page and a small JSON API (`/api/files`,
   `/api/status`, `/api/play`, `/api/toggle`, `/api/restart`, `/api/loop`,
   `/api/volume`, `/api/sleep-timer`, `/api/sleep-timer/cancel`,
-  `/api/devices`, `/api/output-device`), plus the
+  `/api/devices`, `/api/output-device`, `/api/mode`,
+  `/api/capture-devices`, `/api/capture-device`, `/api/record/start`,
+  `/api/record/stop`, `/api/delete`), plus the
   PWA files (`/manifest.webmanifest`, `/sw.js`, `/icon-192.png`,
   `/icon-512.png`).
 - `assets/index.html` - the whole UI: one file, inline CSS/JS, no build step.

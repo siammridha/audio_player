@@ -22,6 +22,38 @@ pub struct PlayerStatus {
     /// Which output the user asked for.
     #[serde(rename = "outputChoice")]
     pub output_choice: OutputChoice,
+    pub mode: Mode,
+    /// Only set in Capture mode.
+    pub capture: Option<CaptureStatus>,
+}
+
+/// Which card the web page shows: playing files, or capturing an input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    Play,
+    Capture,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct CaptureStatus {
+    /// The capture card in use, or `None` while no card that can record is
+    /// present.
+    pub device: Option<String>,
+    #[serde(rename = "deviceName")]
+    pub device_name: Option<String>,
+    /// The capture card the user picked, if any.
+    #[serde(rename = "deviceChoice")]
+    pub device_choice: Option<String>,
+    pub recording: bool,
+    /// Name of the file being recorded, inside the music folder.
+    pub file: Option<String>,
+    /// Seconds recorded so far.
+    pub elapsed: f64,
+    /// Size of the file being recorded.
+    pub bytes: u64,
+    /// Peak input level of the latest samples, 0.0..=1.0.
+    pub level: f32,
 }
 
 /// The user's pick of where sound should go.
@@ -101,11 +133,33 @@ pub trait Player: Send + Sync {
     /// to exist. Best-effort: must not panic on a stale/bad snapshot.
     fn restore(&self, path: &Path, snapshot: &PersistedState);
 
+    /// Stops and forgets the current track, so nothing is loaded.
+    fn unload(&self);
+
     /// Sound cards currently present that can be picked as the output.
     fn output_devices(&self) -> Vec<OutputDevice>;
 
     /// Switches where sound goes, keeping the current track playing.
     fn set_output(&self, choice: OutputChoice);
+
+    /// Entering Capture pauses the track and starts listening to the
+    /// capture card. Leaving it stops capturing (and any recording).
+    fn set_mode(&self, mode: Mode);
+
+    /// Sound cards currently present that can record.
+    fn capture_devices(&self) -> Vec<OutputDevice>;
+
+    /// Picks the capture card by its short id. `None`, or a card that isn't
+    /// present, means the newest card that can record.
+    fn set_capture_device(&self, id: Option<String>);
+
+    /// Starts writing the captured sound to a new WAV file at `path`. Fails
+    /// outside Capture mode or while no capture card is open.
+    fn start_recording(&self, path: &Path) -> anyhow::Result<()>;
+
+    /// Stops recording and finishes the file. Returns once the file is
+    /// complete on disk.
+    fn stop_recording(&self);
 
     fn status(&self) -> PlayerStatus;
 }
