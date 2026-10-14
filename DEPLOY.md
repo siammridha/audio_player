@@ -42,8 +42,13 @@ cat /var/log/audio-player.log
 
 **USB sound card, with a fallback:** the player plays through an external
 USB sound card when it's plugged in, and through the device's own built-in
-speaker otherwise - no restart needed either way. To check the switch is
-working, watch the log while you plug/unplug the USB card:
+speaker otherwise - no restart needed either way. That's the default
+(Automatic) mode. Tapping the "Playing through ..." pill under the page
+title and picking a specific card instead makes that card the one it
+switches to and from (the choice is saved in
+`/var/lib/audio-player/output_device.json`; delete that file and restart the
+service to go back to Automatic). To check the switch is
+working, watch the log while you plug/unplug the card:
 
 ```sh
 tail -f /var/log/audio-player.log
@@ -53,22 +58,26 @@ Every line is timestamped (UTC) and tagged with a level (`ERROR`, `INFO`,
 or `DEBUG`), so it can be lined up against `dmesg` and `aplay -l` when
 something looks wrong. What to expect at the default `INFO` level:
 
-- On startup: `starting on the built-in speaker ... checking for the USB
-  sound card`.
-- Plugging the USB card in: `sound card detected`, then about 5 seconds
-  later (a settle delay before it's touched) `switching to the USB sound
+- On startup: `starting on the built-in speaker ... checking for the
+  Device sound card` (`Device` is the USB card's ALSA id; with a card
+  picked on the page, its id shows here instead).
+- Plugging the card in: `Device sound card detected`, then about 5 seconds
+  later (a settle delay before it's touched) `switching to the Device sound
   card`.
-- Unplugging it: `sound card disconnected`, then right away `falling back
-  to the built-in speaker`.
+- Unplugging it: `Device sound card disconnected`, then right away `falling
+  back to the built-in speaker`.
+- Picking a card on the page: `switching to the <id> sound card` right
+  away if it's plugged in (no settle delay), otherwise `falling back to the
+  built-in speaker`.
 - Using the web page: `playing <file>` and `paused playback`/`resumed
   playback`, so you can tell from the log alone whether a button press on
   the page actually reached the player.
 
 If audio isn't playing, check which device it's actually using (a line
-like `switching to the USB sound card` with nothing after it means it's
+like `switching to the Device sound card` with nothing after it means it's
 still there) - sound is likely just coming out of the *other* output than
-the one you're listening on. The web page itself also shows this, as a
-small line under the title ("Playing through USB sound card" / "Playing
+the one you're listening on. The web page itself also shows this, in the
+pill under the title ("Playing through USB PnP Sound Device" / "Playing
 through built-in speaker").
 
 **Log level:** a normal install (`deploy/install.sh`) sets the service to

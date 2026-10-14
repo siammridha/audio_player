@@ -1,6 +1,7 @@
 mod http;
 mod library;
 mod log;
+mod output_device;
 mod player;
 mod sleep_timer;
 mod state_store;
@@ -49,19 +50,20 @@ fn main() -> anyhow::Result<()> {
         ));
     }
 
+    let output_device_file = state_file.with_file_name("output_device.json");
+    let output_choice = output_device::load(&output_device_file);
+
     let use_mock = env::var("AUDIO_PLAYER_MOCK").is_ok_and(|v| v == "1");
     let player: Arc<dyn Player> = if use_mock {
-        Arc::new(MockPlayer::new())
+        let mock = MockPlayer::new();
+        mock.set_output(output_choice);
+        Arc::new(mock)
     } else {
         let device = env::var("AUDIO_DEVICE")
             .unwrap_or_else(|_| player::alsa_backend::DEFAULT_DEVICE.to_string());
         let fallback_device = env::var("AUDIO_DEVICE_FALLBACK")
             .unwrap_or_else(|_| player::alsa_backend::DEFAULT_FALLBACK_DEVICE.to_string());
-        AlsaPlayer::new(
-            &device,
-            &fallback_device,
-            player::alsa_backend::PRIMARY_CARD_NAME,
-        )?
+        AlsaPlayer::new(&device, &fallback_device, output_choice)?
     };
 
     if let Some(snapshot) = state_store::load(&state_file) {
@@ -83,6 +85,7 @@ fn main() -> anyhow::Result<()> {
         state_file,
         sleep_timer_file,
         sleep_timer: Mutex::new(initial_sleep_timer),
+        output_device_file,
         index_html: INDEX_HTML,
         manifest: MANIFEST,
         service_worker: SERVICE_WORKER,

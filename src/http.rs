@@ -5,7 +5,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::library;
-use crate::player::Player;
+use crate::output_device;
+use crate::player::{OutputChoice, Player};
 use crate::sleep_timer::{self, TimerState};
 use crate::state_store;
 
@@ -15,6 +16,7 @@ pub struct AppState {
     pub state_file: PathBuf,
     pub sleep_timer_file: PathBuf,
     pub sleep_timer: Mutex<Option<TimerState>>,
+    pub output_device_file: PathBuf,
     pub index_html: &'static str,
     pub manifest: &'static str,
     pub service_worker: &'static str,
@@ -81,6 +83,11 @@ struct VolumeRequest {
 #[derive(Deserialize)]
 struct SleepTimerRequest {
     at: u64,
+}
+
+#[derive(Deserialize)]
+struct OutputDeviceRequest {
+    device: OutputChoice,
 }
 
 /// Routes one request to a handler. Kept as a plain function of its inputs
@@ -171,6 +178,25 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
             status_response(state)
         }
 
+        ("GET", "/api/devices") => Response::json(
+            200,
+            serde_json::to_value(state.player.output_devices()).unwrap(),
+        ),
+
+        ("POST", "/api/output-device") => {
+            let Ok(req) = serde_json::from_slice::<OutputDeviceRequest>(body) else {
+                return Response::bad_request("expected { \"device\": \"auto\" | \"<card id>\" }");
+            };
+            if let OutputChoice::Card(id) = &req.device
+                && !state.player.output_devices().iter().any(|d| &d.id == id)
+            {
+                return Response::bad_request("unknown device");
+            }
+            state.player.set_output(req.device.clone());
+            output_device::persist(&state.output_device_file, &req.device);
+            status_response(state)
+        }
+
         _ => Response::not_found(),
     }
 }
@@ -208,6 +234,7 @@ mod tests {
             state_file: dir.path().join("state.json"),
             sleep_timer_file: dir.path().join("sleep_timer.json"),
             sleep_timer: Mutex::new(None),
+            output_device_file: dir.path().join("output_device.json"),
             index_html: "<html></html>",
             manifest: "{}",
             service_worker: "",
@@ -408,6 +435,75 @@ mod tests {
 
         let saved = sleep_timer::load(&state.sleep_timer_file, 0).unwrap();
         assert_eq!(saved.at, at);
+    }
+
+    #[test]
+    fn lists_output_devices() {
+        let (state, _dir) = test_state();
+        let resp = handle(&state, "GET", "/api/devices", b"");
+        assert_eq!(resp.status, 200);
+        assert_eq!(
+            json_body(&resp)[0],
+            json!({ "id": "Device", "name": "USB PnP Sound Device" })
+        );
+    }
+
+    #[test]
+    fn output_choice_defaults_to_auto() {
+        let (state, _dir) = test_state();
+        let status = handle(&state, "GET", "/api/status", b"");
+        assert_eq!(json_body(&status)["outputChoice"], "auto");
+    }
+
+    #[test]
+    fn choosing_an_output_device_shows_up_in_status_and_is_saved() {
+        let (state, _dir) = test_state();
+        let resp = handle(
+            &state,
+            "POST",
+            "/api/output-device",
+            br#"{"device":"rt5672"}"#,
+        );
+        assert_eq!(json_body(&resp)["outputChoice"], "rt5672");
+
+        let status = handle(&state, "GET", "/api/status", b"");
+        assert_eq!(json_body(&status)["outputChoice"], "rt5672");
+        assert_eq!(
+            output_device::load(&state.output_device_file),
+            OutputChoice::Card("rt5672".to_string())
+        );
+
+        let resp = handle(
+            &state,
+            "POST",
+            "/api/output-device",
+            br#"{"device":"auto"}"#,
+        );
+        assert_eq!(json_body(&resp)["outputChoice"], "auto");
+        assert_eq!(
+            output_device::load(&state.output_device_file),
+            OutputChoice::Auto
+        );
+    }
+
+    #[test]
+    fn output_device_rejects_an_unknown_card() {
+        let (state, _dir) = test_state();
+        let resp = handle(
+            &state,
+            "POST",
+            "/api/output-device",
+            br#"{"device":"nope"}"#,
+        );
+        assert_eq!(resp.status, 400);
+        assert!(!state.output_device_file.exists());
+    }
+
+    #[test]
+    fn output_device_rejects_bad_body() {
+        let (state, _dir) = test_state();
+        let resp = handle(&state, "POST", "/api/output-device", b"not json");
+        assert_eq!(resp.status, 400);
     }
 
     #[test]

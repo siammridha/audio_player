@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use super::{PersistedState, Player, PlayerStatus};
+use super::{OutputChoice, OutputDevice, PersistedState, Player, PlayerStatus};
 use crate::library;
 
 struct State {
@@ -15,6 +15,7 @@ struct State {
     elapsed_base: f64,
     /// Set while "playing"; position is elapsed_base plus time since this.
     running_since: Option<Instant>,
+    output_choice: OutputChoice,
 }
 
 /// In-memory stand-in for `AlsaPlayer`, used wherever there's no sound card
@@ -34,6 +35,7 @@ impl MockPlayer {
                 duration: None,
                 elapsed_base: 0.0,
                 running_since: None,
+                output_choice: OutputChoice::Auto,
             }),
         }
     }
@@ -88,6 +90,24 @@ impl Player for MockPlayer {
         state.running_since = snapshot.playing.then(Instant::now);
     }
 
+    /// Stand-ins for the real device's USB card and built-in sound chip.
+    fn output_devices(&self) -> Vec<OutputDevice> {
+        vec![
+            OutputDevice {
+                id: "Device".to_string(),
+                name: "USB PnP Sound Device".to_string(),
+            },
+            OutputDevice {
+                id: "rt5672".to_string(),
+                name: "sof-rt5672".to_string(),
+            },
+        ]
+    }
+
+    fn set_output(&self, choice: OutputChoice) {
+        self.state.lock().unwrap().output_choice = choice;
+    }
+
     fn status(&self) -> PlayerStatus {
         let state = self.state.lock().unwrap();
         let position = state.elapsed_base
@@ -102,7 +122,8 @@ impl Player for MockPlayer {
             position,
             duration: state.duration,
             volume: state.volume,
-            output: "mock",
+            output: "mock".to_string(),
+            output_choice: state.output_choice.clone(),
         }
     }
 }

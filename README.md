@@ -5,7 +5,8 @@ Linux. The program plays sound out loud through an external USB sound card
 when it's plugged in, falling back to the device's own built-in speaker
 otherwise. A web page (dark background, orange accents) served on port 3000 is
 the remote control: pick a file, play/pause, loop (on by default), start
-over, adjust volume, and set a sleep timer. It's a PWA, so it can be
+over, adjust volume, set a sleep timer, and pick which sound card to play
+through (see below). It's a PWA, so it can be
 installed to a phone's home screen ("Add to Home Screen" in the browser
 menu) and launches full-screen like an app. Playback state (track,
 position, volume, loop, play/pause) is saved to disk as it changes, so a
@@ -21,6 +22,16 @@ remove it. It repeats every day at that time until removed - it's not a
 one-off. It's driven by the server, not the browser tab, so it still fires
 even if the phone is asleep or the page is closed.
 
+The pill under the title ("Playing through ...") says which device is
+actually playing, and tapping it opens a list of every sound card the
+device can see right now, by name. Until a card is picked, it uses the
+USB-card-with-fallback behavior above (Automatic). Picking one plays through
+that card; if it's unplugged, sound moves to the built-in speaker, and goes
+back to the picked card when it's plugged in again. The choice is saved to
+an `output_device.json` file next to `STATE_FILE`, so it survives a
+restart. The list has no "Automatic" entry; to go back to it, delete
+`output_device.json` and restart the service.
+
 ## How it's built
 
 - `src/player/` - a `Player` trait with two implementations:
@@ -29,11 +40,13 @@ even if the phone is asleep or the page is closed.
     audio straight to ALSA via the [alsa](https://docs.rs/alsa) crate
     (rather than through rodio's own output/`cpal` layer, which has a bug
     on this device's sound driver that silently drops audio). Plays
-    through the external USB sound card when it's plugged in, and falls
-    back to the Wyse 3040's built-in speaker otherwise - see
-    `device_watch.rs` below for how that's detected.
-  - `device_watch.rs` - watches for the USB sound card appearing/
-    disappearing. Listens straight to the kernel's netlink hotplug
+    through the wanted card (the USB card in Automatic mode, or the one
+    picked on the page) when it's plugged in, and falls back to the Wyse
+    3040's built-in speaker otherwise - see `device_watch.rs` below for how
+    that's detected.
+  - `device_watch.rs` - lists the sound cards, and watches for the wanted
+    card appearing/disappearing (it follows the new card when the choice
+    changes). Listens straight to the kernel's netlink hotplug
     broadcast (no udev - this device runs mdev), rechecking the actual ALSA
     card list on every event rather than trusting the event's contents, and
     only acts on a real change in presence. A newly-appeared card gets a
@@ -56,9 +69,13 @@ even if the phone is asleep or the page is closed.
   saved timer whose time has already passed (e.g. the server was down over
   it) is rolled forward to its next occurrence on load rather than firing
   late.
+- `src/output_device.rs` - saves/loads the output choice (`"auto"` or a card
+  id) in `output_device.json` next to `STATE_FILE`. A missing or corrupt
+  file means Automatic.
 - `src/http.rs` - the web page and a small JSON API (`/api/files`,
   `/api/status`, `/api/play`, `/api/toggle`, `/api/restart`, `/api/loop`,
-  `/api/volume`, `/api/sleep-timer`, `/api/sleep-timer/cancel`), plus the
+  `/api/volume`, `/api/sleep-timer`, `/api/sleep-timer/cancel`,
+  `/api/devices`, `/api/output-device`), plus the
   PWA files (`/manifest.webmanifest`, `/sw.js`, `/icon-192.png`,
   `/icon-512.png`).
 - `assets/index.html` - the whole UI: one file, inline CSS/JS, no build step.
@@ -108,7 +125,7 @@ Environment variables the program reads:
 | `MUSIC_DIR`         | `/var/lib/audio-player/audio`   | folder scanned for audio files    |
 | `STATE_FILE`        | `/var/lib/audio-player/state.json` | file where playback state is saved so it survives a restart |
 | `AUDIO_PLAYER_MOCK` | unset                           | set to `1` to skip real playback  |
-| `AUDIO_DEVICE`      | `plughw:CARD=Device,DEV=0`      | ALSA device sound is played through when the USB sound card is present (see `aplay -l` for card names) |
-| `AUDIO_DEVICE_FALLBACK` | `plughw:CARD=rt5672,DEV=0`  | ALSA device used instead when the USB sound card isn't plugged in (the Wyse 3040's built-in speaker) |
+| `AUDIO_DEVICE`      | `plughw:CARD=Device,DEV=0`      | ALSA device sound is played through in Automatic mode when the USB sound card (card id `Device`) is present (see `aplay -l` for card names) |
+| `AUDIO_DEVICE_FALLBACK` | `plughw:CARD=rt5672,DEV=0`  | ALSA device used instead when the wanted card isn't plugged in (the Wyse 3040's built-in speaker) |
 
 Supported audio file types: `.mp3`, `.wav`, `.flac`, `.ogg`.

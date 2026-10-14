@@ -280,4 +280,29 @@ sleep 1.3
 sleep_timer_after_restart=$(curl -s "http://127.0.0.1:$PORT/api/status" | jq '.sleepTimer.at')
 assert_eq "sleep timer survives a restart" "$at_ms" "$sleep_timer_after_restart"
 
+# --- Output device ---
+# The mock backend reports two fake cards. Picking one is simulated with a
+# native "change" event, the same way the OS picker commits a choice.
+
+options=$(browser eval "Array.from(document.querySelectorAll('#output-choice option')).map(o => o.textContent).join(',')")
+assert_eq "output picker lists every card" '"USB PnP Sound Device,sof-rt5672"' "$options"
+label=$(browser eval "document.getElementById('output-device').textContent")
+assert_eq "output pill says what is playing" '"Playing through mock output"' "$label"
+
+browser eval "(() => {
+	const el = document.getElementById('output-choice');
+	el.value = 'rt5672';
+	el.dispatchEvent(new Event('change', { bubbles: true }));
+})()" >/dev/null
+sleep 0.2
+output_choice=$(curl -s "http://127.0.0.1:$PORT/api/status" | jq -r '.outputChoice')
+assert_eq "picking a card sends it to the server" "rt5672" "$output_choice"
+
+stop_server
+start_server
+sleep 1.3
+
+choice=$(browser eval "document.getElementById('output-choice').value")
+assert_eq "the picked card survives a restart" '"rt5672"' "$choice"
+
 echo "All browser checks passed."

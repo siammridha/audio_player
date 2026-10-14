@@ -16,9 +16,51 @@ pub struct PlayerStatus {
     pub duration: Option<f64>,
     /// Playback volume, from 0.0 (silent) to 1.0 (full).
     pub volume: f32,
-    /// Which sound output is currently in use: "usb", "built-in", or
-    /// "mock".
-    pub output: &'static str,
+    /// Which sound output is currently in use: the ALSA card id being
+    /// played through, "built-in" for the fallback device, or "mock".
+    pub output: String,
+    /// Which output the user asked for.
+    #[serde(rename = "outputChoice")]
+    pub output_choice: OutputChoice,
+}
+
+/// The user's pick of where sound should go.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum OutputChoice {
+    /// The USB card when it's plugged in, otherwise the built-in speaker.
+    Auto,
+    /// A specific ALSA card, by its short id (e.g. "Device"). The built-in
+    /// speaker is still used while that card isn't plugged in.
+    Card(String),
+}
+
+impl From<String> for OutputChoice {
+    fn from(s: String) -> Self {
+        if s == "auto" {
+            Self::Auto
+        } else {
+            Self::Card(s)
+        }
+    }
+}
+
+impl From<OutputChoice> for String {
+    fn from(choice: OutputChoice) -> Self {
+        match choice {
+            OutputChoice::Auto => "auto".to_string(),
+            OutputChoice::Card(id) => id,
+        }
+    }
+}
+
+/// A sound card that can be picked as the output.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct OutputDevice {
+    /// ALSA short id, as used in `CARD=` device strings (e.g. "Device").
+    pub id: String,
+    /// Longer descriptive name (e.g. "USB PnP Sound Device").
+    pub name: String,
 }
 
 /// A snapshot of playback state saved to disk so it survives a service
@@ -58,6 +100,12 @@ pub trait Player: Send + Sync {
     /// the server starts. `path` has already been resolved and confirmed
     /// to exist. Best-effort: must not panic on a stale/bad snapshot.
     fn restore(&self, path: &Path, snapshot: &PersistedState);
+
+    /// Sound cards currently present that can be picked as the output.
+    fn output_devices(&self) -> Vec<OutputDevice>;
+
+    /// Switches where sound goes, keeping the current track playing.
+    fn set_output(&self, choice: OutputChoice);
 
     fn status(&self) -> PlayerStatus;
 }

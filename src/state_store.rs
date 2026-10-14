@@ -78,6 +78,7 @@ pub fn persist(path: &Path, status: &PlayerStatus) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::player::OutputChoice;
 
     #[test]
     fn round_trips_through_disk() {
@@ -90,7 +91,8 @@ mod tests {
             position: 12.5,
             duration: Some(180.0),
             volume: 0.75,
-            output: "mock",
+            output: "mock".to_string(),
+            output_choice: OutputChoice::Auto,
         };
 
         persist(&path, &status);
@@ -134,7 +136,8 @@ mod tests {
             position: 0.0,
             duration: None,
             volume: 1.0,
-            output: "mock",
+            output: "mock".to_string(),
+            output_choice: OutputChoice::Auto,
         };
 
         persist(&path, &status);

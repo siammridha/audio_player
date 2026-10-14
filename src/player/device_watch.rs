@@ -18,49 +18,63 @@
 
 use std::os::unix::io::RawFd;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use alsa::ctl::Ctl;
+
+use super::OutputDevice;
 
 const SETTLE_DELAY: Duration = Duration::from_secs(5);
 const SOCKET_OPEN_RETRIES: u32 = 5;
 const SOCKET_RETRY_DELAY: Duration = Duration::from_secs(1);
 const RECV_BUF_LEN: usize = 8192;
 
-/// True if an ALSA card with this short id (as shown by `aplay -l` and used
-/// in `CARD=` device strings, e.g. "Device") currently exists.
+/// Every ALSA card currently present.
 ///
-/// This is `snd_ctl_card_info_get_id`, not `snd_card_get_name` - the name is
-/// a longer descriptive string (e.g. "USB PnP Sound Device"), a different
-/// field that never matches the short id.
-pub(crate) fn card_present(name: &str) -> bool {
+/// `id` is `snd_ctl_card_info_get_id` - the short id shown by `aplay -l` and
+/// used in `CARD=` device strings (e.g. "Device"). `name` is the longer
+/// descriptive string (e.g. "USB PnP Sound Device"), a different field that
+/// never matches the short id.
+pub fn cards() -> Vec<OutputDevice> {
     alsa::card::Iter::new()
         .filter_map(|c| c.ok())
         .filter_map(|c| Ctl::from_card(&c, false).ok())
         .filter_map(|ctl| ctl.card_info().ok())
-        .filter_map(|info| info.get_id().ok().map(|s| s.to_string()))
-        .any(|n| n == name)
+        .filter_map(|info| {
+            Some(OutputDevice {
+                id: info.get_id().ok()?.to_string(),
+                name: info.get_name().ok()?.to_string(),
+            })
+        })
+        .collect()
 }
 
-/// Starts watching `card_name` for hotplug changes in the background.
-/// `on_change` is called with the confirmed presence state on every real
-/// flip (after the settle delay for an appearance, immediately for a
-/// disappearance). It never fires for the current state at startup - call
-/// `card_present` yourself first if you need that.
-pub fn watch(card_name: &'static str, on_change: impl Fn(bool) + Send + 'static) {
+/// True if an ALSA card with this short id currently exists.
+pub(crate) fn card_present(id: &str) -> bool {
+    cards().iter().any(|c| c.id == id)
+}
+
+/// Starts watching for hotplug changes in the background, for whichever
+/// card `card_name` holds at the time (the caller may change it while
+/// running). `on_change` is called with the confirmed presence state on
+/// every real flip (after the settle delay for an appearance, immediately
+/// for a disappearance). It never fires for the current state at startup -
+/// call `card_present` yourself first if you need that.
+pub fn watch(card_name: Arc<Mutex<String>>, on_change: impl Fn(bool) + Send + 'static) {
     let (recheck_tx, recheck_rx) = mpsc::channel();
     thread::spawn(move || uevent_listener(recheck_tx));
     thread::spawn(move || {
+        let check_name = Arc::clone(&card_name);
         run_presence_loop(
-            move || card_present(card_name),
+            move || card_present(&check_name.lock().unwrap()),
             move |present| {
+                let name = card_name.lock().unwrap().clone();
                 if present {
-                    crate::log::info(&format!("device_watch: {card_name} sound card detected"));
+                    crate::log::info(&format!("device_watch: {name} sound card detected"));
                 } else {
-                    crate::log::info(&format!(
-                        "device_watch: {card_name} sound card disconnected"
-                    ));
+                    crate::log::info(&format!("device_watch: {name} sound card disconnected"));
                 }
                 on_change(present);
             },
