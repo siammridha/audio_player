@@ -117,8 +117,8 @@ http://<device-ip>:3000
 ## Updating things later
 
 **Add or remove songs:** just copy files in/out of
-`/var/lib/audio-player/audio` on the device (e.g. with `scp`). Reload the
-web page afterwards to see the updated list.
+`/var/lib/audio-player/audio` on the device (e.g. with `scp`). The web page
+shows the updated list within a second, without a reload.
 
 **Update the program:** push a new version tag, then re-run the same
 `wget ... | sh` command on the device - it always grabs the latest release.

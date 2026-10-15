@@ -114,9 +114,20 @@ the page. Deleting the track that's loaded stops it first.
   `/api/volume`, `/api/sleep-timer`, `/api/sleep-timer/cancel`,
   `/api/devices`, `/api/output-device`, `/api/mode`,
   `/api/capture-devices`, `/api/capture-device`, `/api/record/start`,
-  `/api/record/stop`, `/api/delete`), plus the
+  `/api/record/stop`, `/api/delete`, `/api/events`), plus the
   PWA files (`/manifest.webmanifest`, `/sw.js`, `/icon-192.png`,
   `/icon-512.png`).
+- `src/events.rs` - pushes updates to every open page over
+  `GET /api/events` (server-sent events), so the page never polls. There
+  are four events, each carrying the same JSON as its GET endpoint:
+  `status` (`/api/status`), `devices` (`/api/devices`), `capture-devices`
+  (`/api/capture-devices`) and `files` (`/api/files`). A thread in
+  `main.rs` checks the status every second (every 250 ms in Capture mode)
+  and the card and file lists every second, and an event is only sent when
+  its data changed. Any button press sends `status` and `files` right
+  away, so every phone follows along. A page that connects (or reconnects)
+  gets the latest copy of all four first. Each page's stream runs on its
+  own thread, so it doesn't use up a request worker.
 - `assets/index.html` - the whole UI: one file, inline CSS/JS, no build step.
 - `assets/manifest.webmanifest`, `assets/sw.js`, `assets/icon-*.png` - what
   makes the page a PWA: an app manifest, a service worker that caches the

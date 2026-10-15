@@ -390,9 +390,13 @@ impl Player for AlsaPlayer {
         let capture = match session.as_ref() {
             Some(session) => {
                 let snap = session.snapshot();
+                // The card takes a moment to open after a switch. Name the
+                // one being opened meanwhile, so the page doesn't flash its
+                // no-device layout.
+                let card = snap.card.or_else(|| capture::pick_card(&device_choice));
                 CaptureStatus {
-                    device: snap.card.as_ref().map(|c| c.id.clone()),
-                    device_name: snap.card.map(|c| c.name),
+                    device: card.as_ref().map(|c| c.id.clone()),
+                    device_name: card.map(|c| c.name),
                     device_choice,
                     recording: snap.recording.is_some(),
                     file: snap.recording,

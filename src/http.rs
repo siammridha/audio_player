@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::capture;
+use crate::events::Events;
 use crate::library;
 use crate::output_device;
 use crate::player::{Mode, OutputChoice, Player};
@@ -19,6 +20,7 @@ pub struct AppState {
     pub sleep_timer: Mutex<Option<TimerState>>,
     pub output_device_file: PathBuf,
     pub capture_device_file: PathBuf,
+    pub events: Events,
     pub index_html: &'static str,
     pub manifest: &'static str,
     pub service_worker: &'static str,
@@ -109,6 +111,16 @@ struct CaptureDeviceRequest {
 /// Routes one request to a handler. Kept as a plain function of its inputs
 /// (no tiny_http types) so it can be tested without a real socket.
 pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Response {
+    let response = route(state, method, path, body);
+    // Other open pages see the change now, not on the next tick.
+    if method == "POST" && response.status == 200 {
+        publish_status(state);
+        publish_files(state);
+    }
+    response
+}
+
+fn route(state: &AppState, method: &str, path: &str, body: &[u8]) -> Response {
     // Requests never carry a query string in this app, but strip one off
     // defensively so an accidental "?foo=bar" doesn't 404.
     let path = path.split('?').next().unwrap_or(path);
@@ -124,15 +136,7 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
         ("GET", "/icon-192.png") => Response::raw("image/png", state.icon_192),
         ("GET", "/icon-512.png") => Response::raw("image/png", state.icon_512),
 
-        ("GET", "/api/files") => {
-            // The page shows the file being recorded on its own, from status.
-            let recording = recording_file(state);
-            let files: Vec<_> = library::list_files(&state.music_dir)
-                .into_iter()
-                .filter(|f| Some(&f.name) != recording.as_ref())
-                .collect();
-            Response::json(200, serde_json::to_value(files).unwrap())
-        }
+        ("GET", "/api/files") => Response::json(200, files_json(state)),
 
         ("GET", "/api/status") => status_response(state),
 
@@ -205,10 +209,7 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
             status_response(state)
         }
 
-        ("GET", "/api/devices") => Response::json(
-            200,
-            serde_json::to_value(state.player.output_devices()).unwrap(),
-        ),
+        ("GET", "/api/devices") => Response::json(200, devices_json(state)),
 
         ("POST", "/api/output-device") => {
             let Ok(req) = serde_json::from_slice::<OutputDeviceRequest>(body) else {
@@ -239,10 +240,7 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
             status_response(state)
         }
 
-        ("GET", "/api/capture-devices") => Response::json(
-            200,
-            serde_json::to_value(state.player.capture_devices()).unwrap(),
-        ),
+        ("GET", "/api/capture-devices") => Response::json(200, capture_devices_json(state)),
 
         ("POST", "/api/capture-device") => {
             let Ok(req) = serde_json::from_slice::<CaptureDeviceRequest>(body) else {
@@ -308,6 +306,10 @@ pub fn handle(state: &AppState, method: &str, path: &str, body: &[u8]) -> Respon
 }
 
 fn status_response(state: &AppState) -> Response {
+    Response::json(200, status_json(state))
+}
+
+fn status_json(state: &AppState) -> serde_json::Value {
     let mut value = serde_json::to_value(state.player.status()).unwrap();
     value["sleepTimer"] = match *state.sleep_timer.lock().unwrap() {
         Some(timer) => json!({ "at": timer.at }),
@@ -316,7 +318,38 @@ fn status_response(state: &AppState) -> Response {
     let disk = capture::disk_space(&state.music_dir);
     value["capture"]["freeBytes"] = json!(disk.map(|(free, _)| free));
     value["capture"]["totalBytes"] = json!(disk.map(|(_, total)| total));
-    Response::json(200, value)
+    value
+}
+
+fn files_json(state: &AppState) -> serde_json::Value {
+    // The page shows the file being recorded on its own, from status.
+    let recording = recording_file(state);
+    let files: Vec<_> = library::list_files(&state.music_dir)
+        .into_iter()
+        .filter(|f| Some(&f.name) != recording.as_ref())
+        .collect();
+    serde_json::to_value(files).unwrap()
+}
+
+fn devices_json(state: &AppState) -> serde_json::Value {
+    serde_json::to_value(state.player.output_devices()).unwrap()
+}
+
+fn capture_devices_json(state: &AppState) -> serde_json::Value {
+    serde_json::to_value(state.player.capture_devices()).unwrap()
+}
+
+pub fn publish_status(state: &AppState) {
+    state.events.publish("status", &status_json(state));
+}
+
+pub fn publish_files(state: &AppState) {
+    state.events.publish("files", &files_json(state));
+}
+
+pub fn publish_devices(state: &AppState) {
+    state.events.publish("devices", &devices_json(state));
+    state.events.publish("capture-devices", &capture_devices_json(state));
 }
 
 fn recording_file(state: &AppState) -> Option<String> {
@@ -324,8 +357,8 @@ fn recording_file(state: &AppState) -> Option<String> {
 }
 
 /// Called by the mutating endpoints after they change the player, not by the
-/// plain `GET /api/status` (which the frontend polls every second and
-/// shouldn't trigger a write each time).
+/// plain `GET /api/status` or the status events (which would write every
+/// second).
 fn save_status(state: &AppState) {
     state_store::persist(&state.state_file, &state.player.status());
 }
@@ -349,6 +382,7 @@ mod tests {
             sleep_timer: Mutex::new(None),
             output_device_file: dir.path().join("output_device.json"),
             capture_device_file: dir.path().join("capture_device.json"),
+            events: Events::default(),
             index_html: "<html></html>",
             manifest: "{}",
             service_worker: "",
@@ -637,6 +671,16 @@ mod tests {
         let (state, _dir) = test_state();
         handle(&state, "GET", "/api/status", b"");
         assert!(!state.state_file.exists());
+    }
+
+    #[test]
+    fn a_change_is_sent_to_open_pages() {
+        let (state, _dir) = test_state();
+        let events = state.events.subscribe();
+        post(&state, "/api/loop", br#"{"loop":false}"#);
+        let sent: Vec<String> = events.try_iter().collect();
+        assert!(sent.iter().any(|e| e.starts_with("event: status\n") && e.contains(r#""loop":false"#)));
+        assert!(sent.iter().any(|e| e.starts_with("event: files\n")));
     }
 
     fn post(state: &AppState, path: &str, body: &[u8]) -> Response {

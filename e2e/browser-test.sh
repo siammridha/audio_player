@@ -52,6 +52,12 @@ stop_server() {
 
 start_server
 
+# curl gives up after 2 s since the stream never ends on its own.
+stream=$(curl -s -N --max-time 2 "http://127.0.0.1:$PORT/api/events" || true)
+for event in status devices capture-devices files; do
+	echo "$stream" | grep -qx "event: $event" && echo "ok: the event stream sends $event" || { echo "FAIL: no $event event in [$stream]"; exit 1; }
+done
+
 agent-browser close >/dev/null 2>&1 || true
 
 browser() {

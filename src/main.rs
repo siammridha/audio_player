@@ -1,4 +1,5 @@
 mod capture;
+mod events;
 mod http;
 mod library;
 mod log;
@@ -8,9 +9,10 @@ mod sleep_timer;
 mod state_store;
 
 use std::env;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use player::alsa_backend::AlsaPlayer;
 use player::mock_backend::MockPlayer;
@@ -23,6 +25,12 @@ const SERVICE_WORKER: &str = include_str!("../assets/sw.js");
 const ICON_192: &[u8] = include_bytes!("../assets/icon-192.png");
 const ICON_512: &[u8] = include_bytes!("../assets/icon-512.png");
 const WORKER_THREADS: usize = 4;
+/// How often the status is checked for changes to send. Capture is faster so
+/// the level meter moves smoothly.
+const STATUS_TICK_PLAY: Duration = Duration::from_secs(1);
+const STATUS_TICK_CAPTURE: Duration = Duration::from_millis(250);
+const LISTS_TICK: Duration = Duration::from_secs(1);
+const EVENTS_PING: Duration = Duration::from_secs(15);
 
 fn main() -> anyhow::Result<()> {
     let log_level = log::level_name();
@@ -94,6 +102,7 @@ fn main() -> anyhow::Result<()> {
         sleep_timer: Mutex::new(initial_sleep_timer),
         output_device_file,
         capture_device_file,
+        events: events::Events::default(),
         index_html: INDEX_HTML,
         manifest: MANIFEST,
         service_worker: SERVICE_WORKER,
@@ -146,6 +155,28 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
+    {
+        let state = Arc::clone(&state);
+        std::thread::spawn(move || {
+            let mut lists_checked: Option<Instant> = None;
+            loop {
+                http::publish_status(&state);
+                // No hotplug event covers every card, so the lists are
+                // compared on a timer and only sent when they change.
+                if lists_checked.is_none_or(|t| t.elapsed() >= LISTS_TICK) {
+                    http::publish_devices(&state);
+                    http::publish_files(&state);
+                    lists_checked = Some(Instant::now());
+                }
+                std::thread::sleep(if state.player.status().mode == Mode::Capture {
+                    STATUS_TICK_CAPTURE
+                } else {
+                    STATUS_TICK_PLAY
+                });
+            }
+        });
+    }
+
     let handles: Vec<_> = (0..WORKER_THREADS)
         .map(|_| {
             let server = Arc::clone(&server);
@@ -169,6 +200,14 @@ fn worker(server: Arc<Server>, state: Arc<http::AppState>) {
         };
         let url = request.url().to_string();
 
+        if method == "GET" && url.split('?').next() == Some("/api/events") {
+            let events = state.events.subscribe();
+            // A page holds this open for as long as it's showing, so it
+            // gets its own thread rather than tying up a worker.
+            std::thread::spawn(move || stream_events(request.into_writer(), events));
+            continue;
+        }
+
         let mut body = Vec::new();
         let _ = request.as_reader().read_to_end(&mut body);
 
@@ -181,5 +220,26 @@ fn worker(server: Arc<Server>, state: Arc<http::AppState>) {
             .with_status_code(response.status)
             .with_header(content_type);
         let _ = request.respond(http_response);
+    }
+}
+
+fn stream_events(mut out: Box<dyn Write + Send>, events: std::sync::mpsc::Receiver<String>) {
+    // `retry` makes the browser reconnect after 1 s instead of its default
+    // 3 s, so a page catches up quickly after a server restart.
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\nretry: 1000\n\n";
+    if out.write_all(head.as_bytes()).and_then(|()| out.flush()).is_err() {
+        return;
+    }
+    loop {
+        // The ping is what notices a page that went away while nothing
+        // changed.
+        let message = match events.recv_timeout(EVENTS_PING) {
+            Ok(message) => message,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => ": ping\n\n".to_string(),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        };
+        if out.write_all(message.as_bytes()).and_then(|()| out.flush()).is_err() {
+            return;
+        }
     }
 }

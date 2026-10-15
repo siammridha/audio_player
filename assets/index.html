@@ -634,9 +634,9 @@
   let captureDevices = [];
   let outputChoice = "auto";
   let activeOutput = "";
-  // The panel on screen, and the file being recorded (null when not).
+  // The panel on screen.
   let mode = "play";
-  let recordingFile = null;
+  let lastStatus = null;
 
   function escapeHtml(str) {
     return str.replace(/[&<>"']/g, (c) => ({
@@ -802,8 +802,6 @@
       closeOpenRow();
       return;
     }
-    files = await api("/api/files");
-    renderFiles(status);
     renderStatus(status);
   }
 
@@ -888,15 +886,6 @@
     outputChoiceEl.disabled = recording;
   }
 
-  async function refreshDevices() {
-    [devices, captureDevices] = await Promise.all([
-      api("/api/devices"),
-      api("/api/capture-devices"),
-    ]);
-    renderOutputChoices();
-    renderCaptureChoices(null);
-  }
-
   outputChoiceEl.addEventListener("change", async () => {
     const status = await postJson("/api/output-device", { device: outputChoiceEl.value });
     outputChoiceEl.blur();
@@ -963,6 +952,7 @@
 
   function renderStatus(status) {
     if (!status) return;
+    lastStatus = status;
     outputChoice = status.outputChoice;
     activeOutput = status.output;
     renderOutputChoices();
@@ -972,15 +962,6 @@
       showMode(status.mode, true);
     }
     renderCapture(status.capture);
-    const nowRecording = status.capture.recording ? status.capture.file : null;
-    if (recordingFile && !nowRecording) {
-      // The recording just finished: reload the list so it shows its length.
-      api("/api/files").then((list) => {
-        files = list;
-        renderFiles(status);
-      });
-    }
-    recordingFile = nowRecording;
 
     nowPlayingEl.style.visibility = "visible";
     if (status.file) {
@@ -1024,12 +1005,6 @@
     }
     // The capture card changes height with its state.
     fitModesHeight();
-  }
-
-  async function refreshStatus() {
-    const status = await api("/api/status");
-    renderStatus(status);
-    return status;
   }
 
   async function play(name) {
@@ -1142,22 +1117,26 @@
     });
   });
 
-  (async function init() {
-    files = await api("/api/files");
-    await refreshDevices();
-    const status = await refreshStatus();
-    renderFiles(status);
-    // Faster in Capture mode, so the level meter moves smoothly.
-    (async function poll() {
-      try {
-        await refreshStatus();
-      } finally {
-        setTimeout(poll, mode === "capture" ? 250 : 1000);
-      }
-    })();
-    // Slower than status: cards only change when one is plugged in or out.
-    setInterval(refreshDevices, 5000);
-  })();
+  // The server pushes each kind of update when it changes, and sends the
+  // latest of each again whenever this (re)connects.
+  const events = new EventSource("/api/events");
+  events.addEventListener("status", (e) => {
+    const first = !lastStatus;
+    renderStatus(JSON.parse(e.data));
+    if (first) renderFiles(lastStatus);
+  });
+  events.addEventListener("files", (e) => {
+    files = JSON.parse(e.data);
+    if (lastStatus) renderFiles(lastStatus);
+  });
+  events.addEventListener("devices", (e) => {
+    devices = JSON.parse(e.data);
+    renderOutputChoices();
+  });
+  events.addEventListener("capture-devices", (e) => {
+    captureDevices = JSON.parse(e.data);
+    renderCaptureChoices(null);
+  });
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js");

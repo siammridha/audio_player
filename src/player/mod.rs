@@ -36,8 +36,9 @@ pub enum Mode {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct CaptureStatus {
-    /// The capture card in use (in Play mode, the one Capture mode would
-    /// use), or `None` while no card that can record is present.
+    /// The capture card in use (in Play mode, or while it's still opening,
+    /// the one that will be used), or `None` while no card that can record
+    /// is present.
     pub device: Option<String>,
     #[serde(rename = "deviceName")]
     pub device_name: Option<String>,
