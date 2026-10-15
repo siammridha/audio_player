@@ -940,12 +940,14 @@
   let lastScrollAt = 0;
   let modeRequest = null;
 
-  function showMode(next, smooth) {
+  // Jumps without animation: a smooth scroll is cut short when the strip
+  // gets locked for a recording right after, leaving the wrong panel showing.
+  function showMode(next) {
     if (next === mode) return;
     mode = next;
     sleepTimerEl.hidden = mode === "capture";
     const left = mode === "capture" ? modesEl.clientWidth : 0;
-    modesEl.scrollTo({ left, behavior: smooth ? "smooth" : "instant" });
+    modesEl.scrollTo({ left, behavior: "instant" });
   }
 
   let scrollSettleTimer = null;
@@ -1009,7 +1011,7 @@
 
     // Don't yank the strip while someone is mid-swipe.
     if (!modeRequest && Date.now() - lastScrollAt > 400) {
-      showMode(status.mode, true);
+      showMode(status.mode);
     }
     renderCapture(status.capture);
 
