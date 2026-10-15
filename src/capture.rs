@@ -314,7 +314,7 @@ fn read_loop(
                 // Rewrites the header, so the file stays playable if the
                 // power goes out mid-recording.
                 let _ = r.writer.flush();
-                if low_on_space(free_bytes(&r.dir)) {
+                if low_on_space(disk_space(&r.dir).map(|(free, _)| free)) {
                     crate::log::error("audio-player: disk nearly full, stopping the recording");
                     finish(shared, recording.take());
                 }
@@ -343,7 +343,7 @@ fn finish(shared: &Shared, recording: Option<Recording>) {
 
 /// The card the user picked if it's present, otherwise the newest card that
 /// can record.
-fn pick_card(choice: &Option<String>) -> Option<OutputDevice> {
+pub fn pick_card(choice: &Option<String>) -> Option<OutputDevice> {
     let cards = device_watch::capture_cards();
     choice
         .as_ref()
@@ -380,7 +380,8 @@ fn native_channels(card: &str) -> Option<u16> {
     Some(hwp.get_channels_min().ok()?.clamp(1, 2) as u16)
 }
 
-fn free_bytes(dir: &Path) -> Option<u64> {
+/// Free and total bytes on the disk that holds `dir`.
+pub fn disk_space(dir: &Path) -> Option<(u64, u64)> {
     let path = CString::new(dir.as_os_str().as_bytes()).ok()?;
     // SAFETY: `path` is a valid C string and `stat` is a plain struct that
     // statvfs fills in.
@@ -388,7 +389,8 @@ fn free_bytes(dir: &Path) -> Option<u64> {
     if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } != 0 {
         return None;
     }
-    Some(stat.f_bavail as u64 * stat.f_frsize as u64)
+    let block = stat.f_frsize as u64;
+    Some((stat.f_bavail as u64 * block, stat.f_blocks as u64 * block))
 }
 
 fn low_on_space(free: Option<u64>) -> bool {
@@ -530,9 +532,10 @@ mod tests {
     }
 
     #[test]
-    fn free_bytes_reads_a_real_folder() {
+    fn disk_space_reads_a_real_folder() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(free_bytes(dir.path()).is_some());
+        let (free, total) = disk_space(dir.path()).unwrap();
+        assert!(total >= free);
     }
 
     #[test]

@@ -219,7 +219,7 @@ impl Player for MockPlayer {
             output: "mock".to_string(),
             output_choice: state.output_choice.clone(),
             mode: state.mode,
-            capture: (state.mode == Mode::Capture).then(|| capture_status(&state)),
+            capture: capture_status(&state),
         }
     }
 }
@@ -255,7 +255,11 @@ fn capture_status(state: &State) -> CaptureStatus {
             .and_then(|(path, _)| path.file_name().map(|n| n.to_string_lossy().into_owned())),
         elapsed,
         bytes,
-        level: 0.4 + 0.2 * wobble,
+        level: if state.mode == Mode::Capture {
+            0.4 + 0.2 * wobble
+        } else {
+            0.0
+        },
     }
 }
 

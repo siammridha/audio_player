@@ -384,19 +384,35 @@ impl Player for AlsaPlayer {
     }
 
     fn status(&self) -> PlayerStatus {
-        let capture = self.capture.lock().unwrap().as_ref().map(|session| {
-            let snap = session.snapshot();
-            CaptureStatus {
-                device: snap.card.as_ref().map(|c| c.id.clone()),
-                device_name: snap.card.map(|c| c.name),
-                device_choice: self.capture_choice.lock().unwrap().clone(),
-                recording: snap.recording.is_some(),
-                file: snap.recording,
-                elapsed: snap.elapsed,
-                bytes: snap.bytes,
-                level: snap.level,
+        let device_choice = self.capture_choice.lock().unwrap().clone();
+        let session = self.capture.lock().unwrap();
+        let in_capture = session.is_some();
+        let capture = match session.as_ref() {
+            Some(session) => {
+                let snap = session.snapshot();
+                CaptureStatus {
+                    device: snap.card.as_ref().map(|c| c.id.clone()),
+                    device_name: snap.card.map(|c| c.name),
+                    device_choice,
+                    recording: snap.recording.is_some(),
+                    file: snap.recording,
+                    elapsed: snap.elapsed,
+                    bytes: snap.bytes,
+                    level: snap.level,
+                }
             }
-        });
+            // Not opened, so the page can name the card before switching.
+            None => {
+                let card = capture::pick_card(&device_choice);
+                CaptureStatus {
+                    device: card.as_ref().map(|c| c.id.clone()),
+                    device_name: card.map(|c| c.name),
+                    device_choice,
+                    ..CaptureStatus::default()
+                }
+            }
+        };
+        drop(session);
         let playing = self.is_playing();
         let inner = self.inner.lock().unwrap();
         let position = if inner.track.is_some() {
@@ -430,7 +446,7 @@ impl Player for AlsaPlayer {
                 .clone()
                 .unwrap_or_else(|| "built-in".to_string()),
             output_choice: inner.output_choice.clone(),
-            mode: if capture.is_some() {
+            mode: if in_capture {
                 Mode::Capture
             } else {
                 Mode::Play

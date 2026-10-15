@@ -17,6 +17,8 @@
     --track: rgba(255, 255, 255, 0.1);
     --orange: #ff8c1a;
     --orange-dim: #7a4a12;
+    --red: #e53935;
+    --sat: env(safe-area-inset-top);
   }
   * { box-sizing: border-box; }
 
@@ -44,25 +46,20 @@
     max-width: 26rem;
     height: 100vh;
     overflow: hidden;
-    padding: max(2rem, env(safe-area-inset-top)) 1.25rem max(2rem, env(safe-area-inset-bottom));
+    padding: calc(env(safe-area-inset-top) + 25px) 1.25rem max(2rem, env(safe-area-inset-bottom));
     background: linear-gradient(180deg, var(--bg1), var(--bg2) 55%);
+    display: flex;
+    flex-direction: column;
   }
+  /* Only the file list gives up height; it scrolls in what's left. */
+  main > * { flex-shrink: 0; }
   main.pull-settling { transition: transform 0.4s cubic-bezier(0.33, 1, 0.68, 1); }
-  h1 {
-    text-align: center;
-    font-size: 0.85rem;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin: 0 0 1.75rem;
-  }
   svg { flex-shrink: 0; display: block; }
 
   .art {
     width: 11rem;
     height: 11rem;
-    margin: 0 auto 1.5rem;
+    margin: 0 auto 1rem;
     border-radius: 20px;
     background: radial-gradient(circle at 30% 30%, #ffb35c, var(--orange) 45%, var(--orange-dim) 100%);
     display: flex;
@@ -73,7 +70,7 @@
   .art svg { width: 13rem; height: 13rem; color: rgba(0, 0, 0, 0.45); }
 
   #now-playing { text-align: center; font-size: 1.15rem; font-weight: 600; margin: 0 0 0.25rem; }
-  #now-playing-caption { text-align: center; color: var(--muted); font-size: 0.8rem; margin: 0 0 1.5rem; }
+  #now-playing-caption { text-align: center; color: var(--muted); font-size: 0.8rem; margin: 0 0 1rem; }
   .pill {
     position: relative;
     display: flex;
@@ -90,7 +87,7 @@
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
   }
-  #output { margin: -1.25rem auto 1.5rem; }
+  #output { margin: 0 auto 1rem; }
   .pill svg { width: 16px; height: 16px; }
   .pill .icon svg { color: var(--orange); }
   .pill .label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -113,7 +110,7 @@
     touch-action: manipulation;
   }
 
-  #progress { display: flex; align-items: center; gap: 0.6rem; margin: 0 0 1.75rem; }
+  #progress { display: flex; align-items: center; gap: 0.6rem; margin: 0 0 1rem; }
   #progress-bar { flex: 1; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
   #progress-fill { height: 100%; width: 0%; background: var(--orange); border-radius: 2px; }
   .time { color: var(--muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -142,10 +139,34 @@
     flex-direction: column;
     align-items: center;
     gap: 1rem;
-    margin: 0 0 1.75rem;
+    margin: 0 0 1rem;
     padding: 1.25rem;
   }
-  #capture-card.recording { background: #1c1209; border-color: rgba(255, 140, 26, 0.35); }
+  #capture-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    max-width: 100%;
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  #capture-file { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #capture-title .dot { flex-shrink: 0; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--muted); }
+  #capture-card.recording #capture-title { color: var(--text); }
+  #capture-card.recording #capture-title .dot { border: none; background: var(--red); box-shadow: 0 0 0 4px rgba(229, 57, 53, 0.25); }
+  #capture-storage { align-self: stretch; display: flex; flex-direction: column; gap: 0.5rem; }
+  #capture-storage-text {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+  }
+  #capture-storage b { color: var(--text); font-weight: 600; }
+  #disk-bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+  #disk-fill { height: 100%; width: 0%; border-radius: 3px; background: var(--muted); }
   #capture-time {
     margin: 0;
     font-size: 2.1rem;
@@ -154,7 +175,9 @@
     color: var(--muted);
   }
   #capture-card.recording #capture-time { color: var(--text); }
+  #capture-card.no-device #capture-title,
   #capture-card.no-device #capture-time,
+  #capture-card.no-device #capture-storage,
   #capture-card.no-device #level { display: none; }
   #capture-card.no-device #capture-device .icon svg { color: var(--muted); }
   #record {
@@ -173,6 +196,7 @@
   }
   #record:active:not(:disabled) { transform: scale(0.93); }
   #record span { width: 28px; height: 28px; border-radius: 50%; background: #241400; }
+  #record.stop { background: var(--red); }
   #record.stop span { width: 24px; height: 24px; border-radius: 4px; }
   #record:disabled { background: var(--orange-dim); cursor: default; }
   #record:disabled span { background: #1a1a1a; }
@@ -181,7 +205,7 @@
   #level-bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
   #level-fill { height: 100%; width: 0%; border-radius: 3px; background: var(--orange); transition: width 0.1s linear; }
 
-  .controls { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-bottom: 1.75rem; }
+  .controls { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-bottom: 1rem; }
   .controls button {
     display: flex;
     align-items: center;
@@ -212,10 +236,10 @@
   #play-pause svg { width: 40px; height: 40px; }
   #play-pause:disabled { background: var(--orange-dim); color: #1a1a1a; }
 
-  #volume { position: relative; display: flex; align-items: center; gap: 0.85rem; margin: 0 0 1.75rem; color: var(--muted); }
+  #volume { position: relative; display: flex; align-items: center; gap: 0.85rem; margin: 0 0 1rem; color: var(--muted); }
   #volume svg { width: 25px; height: 25px; }
 
-  #sleep-timer { display: flex; align-items: center; justify-content: center; gap: 0.3rem; margin: 0 0 1.75rem; }
+  #sleep-timer { display: flex; align-items: center; justify-content: center; gap: 0.3rem; margin: 0 0 1rem; }
   #sleep-timer[hidden] { display: none; }
   #sleep-timer-toggle {
     position: relative;
@@ -341,7 +365,18 @@
   #volume-slider:hover::-moz-range-thumb,
   #volume-slider:active::-moz-range-thumb { transform: scale(1.15); }
 
-  ul#files { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  ul#files {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line);
+  }
+  ul#files::-webkit-scrollbar { display: none; }
   #files li { border-bottom: 1px solid var(--line); }
   #files button {
     width: 100%;
@@ -448,7 +483,6 @@
 </div>
 
 <main>
-  <h1>Ruqyah</h1>
   <div id="output" class="pill">
     <span id="output-icon" class="icon"></span>
     <span id="output-device" class="label">&nbsp;</span>
@@ -480,7 +514,15 @@
 
   <section id="capture-panel" class="panel">
     <div id="capture-card" class="card no-device">
+      <p id="capture-title"><span class="dot"></span><span id="capture-file">Start recording</span></p>
       <p id="capture-time">0:00:00</p>
+      <div id="capture-storage">
+        <div id="capture-storage-text">
+          <span><b id="capture-size">0 MB</b> recorded</span>
+          <span><b id="capture-free">&nbsp;</b> free</span>
+        </div>
+        <div id="disk-bar"><div id="disk-fill"></div></div>
+      </div>
       <div id="capture-device" class="pill">
         <span id="capture-device-icon" class="icon"></span>
         <span id="capture-device-label" class="label">&nbsp;</span>
@@ -566,7 +608,11 @@
   const modesEl = document.getElementById("modes");
   const panelEls = { play: document.getElementById("play-panel"), capture: document.getElementById("capture-panel") };
   const captureCardEl = document.getElementById("capture-card");
+  const captureFileEl = document.getElementById("capture-file");
   const captureTimeEl = document.getElementById("capture-time");
+  const captureSizeEl = document.getElementById("capture-size");
+  const captureFreeEl = document.getElementById("capture-free");
+  const diskFillEl = document.getElementById("disk-fill");
   const captureDeviceEl = document.getElementById("capture-device");
   const captureDeviceIconEl = document.getElementById("capture-device-icon");
   const captureDeviceLabelEl = document.getElementById("capture-device-label");
@@ -633,6 +679,7 @@
   }
 
   function formatSize(bytes) {
+    if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
     const mb = bytes / 1e6;
     return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
   }
@@ -640,7 +687,7 @@
   function renderFiles(status) {
     filesEl.innerHTML = "";
     openRow = null;
-    if (files.length === 0 && !recordingFile) {
+    if (files.length === 0) {
       const li = document.createElement("li");
       li.id = "empty";
       li.textContent = "No audio files found.";
@@ -760,23 +807,6 @@
     renderStatus(status);
   }
 
-  // The file being recorded sits at the top of the list with its size.
-  function renderRecordingRow(capture) {
-    let li = document.getElementById("recording-row");
-    if (!capture || !capture.recording) {
-      if (li) li.remove();
-      return;
-    }
-    if (!li) {
-      li = document.createElement("li");
-      li.id = "recording-row";
-      li.innerHTML = '<button class="active" disabled><span class="name"></span><span class="dur"></span></button>';
-      filesEl.prepend(li);
-    }
-    li.querySelector(".name").textContent = capture.file;
-    li.querySelector(".dur").textContent = formatSize(capture.bytes);
-  }
-
   function deviceName(id) {
     const device = devices.find((d) => d.id === id);
     return device ? device.name : id;
@@ -825,8 +855,8 @@
   }
 
   function renderCapture(capture) {
-    const hasDevice = !!(capture && capture.device);
-    const recording = !!(capture && capture.recording);
+    const hasDevice = !!capture.device;
+    const recording = capture.recording;
     captureCardEl.classList.toggle("no-device", !hasDevice);
     captureCardEl.classList.toggle("recording", recording);
     captureDeviceEl.classList.toggle("locked", !hasDevice || recording);
@@ -841,7 +871,12 @@
       captureDeviceLabelEl.textContent = "No capture device found";
     }
     renderCaptureChoices(capture);
+    captureFileEl.textContent = recording ? capture.file : "Start recording";
     captureTimeEl.textContent = formatClock(recording ? capture.elapsed : 0);
+    captureSizeEl.textContent = formatSize(recording ? capture.bytes : 0);
+    const { freeBytes, totalBytes } = capture;
+    captureFreeEl.textContent = freeBytes != null ? formatSize(freeBytes) : "?";
+    diskFillEl.style.width = totalBytes ? `${((totalBytes - freeBytes) / totalBytes) * 100}%` : "0%";
     levelFillEl.style.width = `${Math.round((hasDevice ? capture.level : 0) * 100)}%`;
     recordEl.disabled = !hasDevice;
     recordEl.classList.toggle("stop", recording);
@@ -937,7 +972,7 @@
       showMode(status.mode, true);
     }
     renderCapture(status.capture);
-    const nowRecording = status.capture && status.capture.recording ? status.capture.file : null;
+    const nowRecording = status.capture.recording ? status.capture.file : null;
     if (recordingFile && !nowRecording) {
       // The recording just finished: reload the list so it shows its length.
       api("/api/files").then((list) => {
@@ -946,7 +981,6 @@
       });
     }
     recordingFile = nowRecording;
-    renderRecordingRow(status.capture);
 
     nowPlayingEl.style.visibility = "visible";
     if (status.file) {
@@ -1113,7 +1147,6 @@
     await refreshDevices();
     const status = await refreshStatus();
     renderFiles(status);
-    renderRecordingRow(status.capture);
     // Faster in Capture mode, so the level meter moves smoothly.
     (async function poll() {
       try {
@@ -1129,6 +1162,8 @@
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js");
   }
+
+  console.log("safe-area-inset-top:", getComputedStyle(document.documentElement).getPropertyValue("--sat"));
 
   // Pull-to-refresh: iOS Safari (including installed PWAs) has no built-in
   // pull-to-refresh like Android Chrome does, so this drives it by hand
@@ -1188,6 +1223,8 @@
       "touchstart",
       (e) => {
         if (window.scrollY > 0 || pullSpinnerEl.classList.contains("spinning")) return;
+        // Dragging down in a scrolled list scrolls it back up, not a refresh.
+        if (e.target.closest("#files") && filesEl.scrollTop > 0) return;
         pullStartX = e.touches[0].clientX;
         pullStartY = e.touches[0].clientY;
         pulling = true;

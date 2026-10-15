@@ -78,7 +78,7 @@ pub fn persist(path: &Path, status: &PlayerStatus) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::player::{Mode, OutputChoice};
+    use crate::player::{CaptureStatus, Mode, OutputChoice};
 
     #[test]
     fn round_trips_through_disk() {
@@ -94,7 +94,7 @@ mod tests {
             output: "mock".to_string(),
             output_choice: OutputChoice::Auto,
             mode: Mode::Play,
-            capture: None,
+            capture: CaptureStatus::default(),
         };
 
         persist(&path, &status);
@@ -141,7 +141,7 @@ mod tests {
             output: "mock".to_string(),
             output_choice: OutputChoice::Auto,
             mode: Mode::Play,
-            capture: None,
+            capture: CaptureStatus::default(),
         };
 
         persist(&path, &status);

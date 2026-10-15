@@ -47,9 +47,12 @@ restart. In Capture mode:
   The choice is saved to `capture_device.json` next to `STATE_FILE`.
 - The record button saves a WAV file named `capture-YYYY-MM-DD-HH-MM.wav`
   (local time) into the music folder, at 48 kHz, 16-bit, with the card's own
-  channel count. While recording, it shows at the top of the file list with
-  its size, and swiping, the output picker and the capture picker are
-  locked. Once stopped, it's a normal file in the list.
+  channel count. The card shows how much has been recorded and how much
+  space is free on the music folder's disk (`capture.freeBytes` and
+  `capture.totalBytes` in the status). While recording, the file's name is
+  the card's title (it's left out of the file list), the button turns red,
+  and swiping, the output picker and the capture picker are locked. Once
+  stopped, it's a normal file in the list.
 - A recording stops on its own (and is kept) when the disk has less than
   50 MB free, or when the capture card is unplugged. Its WAV header is
   updated every second, so the file stays playable after a power cut.

@@ -313,16 +313,14 @@ fn status_response(state: &AppState) -> Response {
         Some(timer) => json!({ "at": timer.at }),
         None => serde_json::Value::Null,
     };
+    let disk = capture::disk_space(&state.music_dir);
+    value["capture"]["freeBytes"] = json!(disk.map(|(free, _)| free));
+    value["capture"]["totalBytes"] = json!(disk.map(|(_, total)| total));
     Response::json(200, value)
 }
 
 fn recording_file(state: &AppState) -> Option<String> {
-    state
-        .player
-        .status()
-        .capture
-        .filter(|c| c.recording)
-        .and_then(|c| c.file)
+    state.player.status().capture.file
 }
 
 /// Called by the mutating endpoints after they change the player, not by the
@@ -646,11 +644,22 @@ mod tests {
     }
 
     #[test]
-    fn starts_in_play_mode_without_capture_status() {
+    fn play_mode_still_names_the_capture_card() {
         let (state, _dir) = test_state();
         let status = json_body(&handle(&state, "GET", "/api/status", b""));
         assert_eq!(status["mode"], "play");
-        assert_eq!(status["capture"], serde_json::Value::Null);
+        assert_eq!(status["capture"]["device"], "Device_1");
+        assert_eq!(status["capture"]["recording"], false);
+    }
+
+    #[test]
+    fn status_shows_the_music_folder_disk_space() {
+        let (state, _dir) = test_state();
+        let status = json_body(&handle(&state, "GET", "/api/status", b""));
+        let free = status["capture"]["freeBytes"].as_u64().unwrap();
+        let total = status["capture"]["totalBytes"].as_u64().unwrap();
+        assert!(free > 0);
+        assert!(total >= free);
     }
 
     #[test]

@@ -346,10 +346,12 @@ browser click "#record" >/dev/null
 sleep 1.2
 recording_file=$(curl -s "http://127.0.0.1:$PORT/api/status" | jq -r '.capture.file')
 echo "$recording_file" | grep -qE '^capture-[0-9]{4}(-[0-9]{2}){4}\.wav$' && echo "ok: recording starts with a dated file name" || { echo "FAIL: unexpected recording file [$recording_file]"; exit 1; }
-first_row=$(browser eval "document.querySelector('#files li').id")
-assert_eq "the recording sits at the top of the file list" '"recording-row"' "$first_row"
-size=$(browser eval "document.querySelector('#recording-row .dur').textContent")
-echo "$size" | grep -q 'MB' && echo "ok: the recording row shows its size in MB" || { echo "FAIL: recording row size is [$size]"; exit 1; }
+title=$(browser eval "document.getElementById('capture-file').textContent")
+assert_eq "the card title shows the recording's file name" "\"$recording_file\"" "$title"
+in_list=$(browser eval "document.querySelector('#files button[data-name=\"$recording_file\"]') !== null")
+assert_eq "the recording is not in the file list while recording" "false" "$in_list"
+storage=$(browser eval "document.getElementById('capture-storage-text').textContent")
+echo "$storage" | grep -q 'MB recorded' && echo "$storage" | grep -qE '[0-9.]+ [MG]B free' && echo "ok: the card shows the size recorded and the free space" || { echo "FAIL: storage text is [$storage]"; exit 1; }
 modes_locked=$(browser eval "document.getElementById('modes').classList.contains('locked')")
 assert_eq "swiping is locked while recording" "true" "$modes_locked"
 output_disabled=$(browser eval "document.getElementById('output-choice').disabled")
@@ -363,8 +365,8 @@ assert_eq "Play mode is refused while recording" "capture" "$mode"
 
 browser click "#record" >/dev/null
 sleep 0.8
-row_gone=$(browser eval "document.getElementById('recording-row') === null")
-assert_eq "stopping removes the recording row" "true" "$row_gone"
+title=$(browser eval "document.getElementById('capture-file').textContent")
+assert_eq "stopping puts the card title back" '"Start recording"' "$title"
 duration=$(browser eval "document.querySelector('#files button[data-name=\"$recording_file\"] .dur').textContent")
 echo "$duration" | grep -qE '^"0:0[0-9]"$' && echo "ok: the saved recording shows its length" || { echo "FAIL: saved recording duration is [$duration]"; exit 1; }
 [ -f "$MUSIC_DIR/$recording_file" ] && echo "ok: the recording is saved in the music folder" || { echo "FAIL: $recording_file not in the music folder"; exit 1; }

@@ -23,8 +23,7 @@ pub struct PlayerStatus {
     #[serde(rename = "outputChoice")]
     pub output_choice: OutputChoice,
     pub mode: Mode,
-    /// Only set in Capture mode.
-    pub capture: Option<CaptureStatus>,
+    pub capture: CaptureStatus,
 }
 
 /// Which card the web page shows: playing files, or capturing an input.
@@ -35,10 +34,10 @@ pub enum Mode {
     Capture,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct CaptureStatus {
-    /// The capture card in use, or `None` while no card that can record is
-    /// present.
+    /// The capture card in use (in Play mode, the one Capture mode would
+    /// use), or `None` while no card that can record is present.
     pub device: Option<String>,
     #[serde(rename = "deviceName")]
     pub device_name: Option<String>,

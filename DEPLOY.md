@@ -84,7 +84,8 @@ through built-in speaker").
 `/var/lib/audio-player/audio`. Recordings are plain WAV and take about
 11.5 MB per minute in stereo (half that from a mono card). The device's
 disk has under 1 GB free, so that's roughly 80 minutes; a recording stops
-on its own when less than 50 MB is left. The picked capture card is saved
+on its own when less than 50 MB is left. The Capture card shows the free
+space, so you can see how much room is left. The picked capture card is saved
 in `/var/lib/audio-player/capture_device.json`. At the `INFO` level the log
 shows `switched to Capture mode`, `capturing from the <id> sound card
 (48000 Hz, <n> ch)`, `recording to <file>` and `saved recording <file>`. Recordings can be deleted from the page (swipe
