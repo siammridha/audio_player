@@ -54,7 +54,8 @@ restart. In Capture mode:
   space is free on the music folder's disk (`capture.freeBytes` and
   `capture.totalBytes` in the status). While recording, the file's name is
   the card's title (it's left out of the file list), the button turns red,
-  and swiping, the output picker and the capture picker are locked. Once
+  and swiping and the capture picker are locked. The output picker still
+  works. Once
   stopped, it's a normal file in the list.
 - A recording stops on its own (and is kept) when the disk has less than
   50 MB free, or when the capture card is unplugged. Its WAV header is

@@ -18,7 +18,6 @@
     --orange: #ff8c1a;
     --orange-dim: #7a4a12;
     --red: #e53935;
-    --sat: env(safe-area-inset-top);
   }
   * { box-sizing: border-box; }
 
@@ -589,7 +588,6 @@
   };
 
   const filesEl = document.getElementById("files");
-  const outputEl = document.getElementById("output");
   const outputChoiceEl = document.getElementById("output-choice");
   const outputDeviceEl = document.getElementById("output-device");
   const nowPlayingEl = document.getElementById("now-playing");
@@ -917,8 +915,6 @@
 
     // Nothing that would interrupt a recording can be changed during one.
     modesEl.classList.toggle("locked", recording);
-    outputEl.classList.toggle("locked", recording);
-    outputChoiceEl.disabled = recording;
   }
 
   outputChoiceEl.addEventListener("change", async () => {
@@ -1197,8 +1193,6 @@
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js");
   }
-
-  console.log("safe-area-inset-top:", getComputedStyle(document.documentElement).getPropertyValue("--sat"));
 
   // Pull-to-refresh: iOS Safari (including installed PWAs) has no built-in
   // pull-to-refresh like Android Chrome does, so this drives it by hand

@@ -215,9 +215,6 @@ fn route(state: &AppState, method: &str, path: &str, body: &[u8]) -> Response {
             let Ok(req) = serde_json::from_slice::<OutputDeviceRequest>(body) else {
                 return Response::bad_request("expected { \"device\": \"auto\" | \"<card id>\" }");
             };
-            if recording_file(state).is_some() {
-                return Response::conflict("stop recording first");
-            }
             if let OutputChoice::Card(id) = &req.device
                 && !state.player.output_devices().iter().any(|d| &d.id == id)
             {
@@ -793,14 +790,14 @@ mod tests {
         assert!(file.starts_with("capture-") && file.ends_with(".wav"));
 
         // While recording, the file isn't in the list and nothing that would
-        // interrupt it is allowed.
+        // interrupt it is allowed. The output can still change.
         let files = json_body(&handle(&state, "GET", "/api/files", b""));
         assert!(files.as_array().unwrap().iter().all(|f| f["name"] != file));
         assert_eq!(post(&state, "/api/record/start", b"").status, 409);
         assert_eq!(post(&state, "/api/mode", br#"{"mode":"play"}"#).status, 409);
         assert_eq!(
             post(&state, "/api/output-device", br#"{"device":"rt5672"}"#).status,
-            409
+            200
         );
         assert_eq!(
             post(&state, "/api/capture-device", br#"{"device":"rt5672"}"#).status,
