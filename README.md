@@ -81,7 +81,10 @@ the page. Deleting the track that's loaded stops it first.
     card list on every event rather than trusting the event's contents, and
     only acts on a real change in presence. A newly-appeared card gets a
     5-second settle delay (re-checked after the wait) before anything opens
-    it; a disappearing card is acted on immediately.
+    it; a disappearing card is acted on immediately. The card lists use the
+    same delay: a new card only appears in the output list, the capture
+    list and Capture mode once it has been there for 5 seconds, so every
+    card shows up at the same time as the output switches to it.
   - `mock_backend.rs` - in-memory only, no sound card needed. Used by tests.
     Pretends to have two capture cards, and writes a real silent WAV when a
     recording stops.

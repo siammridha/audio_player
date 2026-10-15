@@ -63,7 +63,8 @@ something looks wrong. What to expect at the default `INFO` level:
   picked on the page, its id shows here instead).
 - Plugging the card in: `Device sound card detected`, then about 5 seconds
   later (a settle delay before it's touched) `switching to the Device sound
-  card`.
+  card`. Every new card gets the same wait before it shows up on the page,
+  including capture cards.
 - Unplugging it: `Device sound card disconnected`, then right away `falling
   back to the built-in speaker`.
 - Picking a card on the page: `switching to the <id> sound card` right

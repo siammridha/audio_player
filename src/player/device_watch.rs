@@ -12,6 +12,9 @@
 //!   re-checked after the wait - if it's gone again, that wait is discarded
 //!   rather than confirming a card that's no longer there.
 //! - A card disappearing is reported immediately, no delay.
+//! - The card lists (`cards`, `capture_cards`) hold a new card back for the
+//!   same settle delay, so the page, the output picker and Capture mode all
+//!   see it at the same time as the output switches to it.
 //! - No polling fallback: presence is learned only from netlink events (plus
 //!   the one check done at startup, so a caller need not wait for an event
 //!   to learn the current state).
@@ -20,7 +23,7 @@ use std::os::unix::io::RawFd;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use alsa::ctl::Ctl;
 
@@ -31,13 +34,55 @@ const SOCKET_OPEN_RETRIES: u32 = 5;
 const SOCKET_RETRY_DELAY: Duration = Duration::from_secs(1);
 const RECV_BUF_LEN: usize = 8192;
 
+/// When each card in a list was first seen, so it's only listed once it has
+/// been present for `SETTLE_DELAY`. One per list, since each list only
+/// knows about its own cards.
+static SEEN_CARDS: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
+static SEEN_CAPTURE_CARDS: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
+
+/// Every ALSA card that has been present for the settle delay.
+pub fn cards() -> Vec<OutputDevice> {
+    settled(&SEEN_CARDS, present_cards(), Instant::now(), SETTLE_DELAY)
+}
+
+/// Every ALSA card that has been present for the settle delay and has a
+/// capture stream on device 0, in card-number order (so a card plugged in
+/// later comes last).
+pub fn capture_cards() -> Vec<OutputDevice> {
+    settled(&SEEN_CAPTURE_CARDS, present_capture_cards(), Instant::now(), SETTLE_DELAY)
+}
+
+/// Keeps `seen` up to date with `present`, and returns the cards in
+/// `present` first seen at least `delay` before `now`.
+fn settled(
+    seen: &Mutex<Vec<(String, Instant)>>,
+    present: Vec<OutputDevice>,
+    now: Instant,
+    delay: Duration,
+) -> Vec<OutputDevice> {
+    let mut seen = seen.lock().unwrap();
+    seen.retain(|(id, _)| present.iter().any(|c| &c.id == id));
+    for card in &present {
+        if !seen.iter().any(|(id, _)| id == &card.id) {
+            seen.push((card.id.clone(), now));
+        }
+    }
+    present
+        .into_iter()
+        .filter(|c| {
+            seen.iter()
+                .any(|(id, since)| id == &c.id && now.duration_since(*since) >= delay)
+        })
+        .collect()
+}
+
 /// Every ALSA card currently present.
 ///
 /// `id` is `snd_ctl_card_info_get_id` - the short id shown by `aplay -l` and
 /// used in `CARD=` device strings (e.g. "Device"). `name` is the longer
 /// descriptive string (e.g. "USB PnP Sound Device"), a different field that
 /// never matches the short id.
-pub fn cards() -> Vec<OutputDevice> {
+fn present_cards() -> Vec<OutputDevice> {
     alsa::card::Iter::new()
         .filter_map(|c| c.ok())
         .filter_map(|c| Ctl::from_card(&c, false).ok())
@@ -51,9 +96,8 @@ pub fn cards() -> Vec<OutputDevice> {
         .collect()
 }
 
-/// Every ALSA card currently present that has a capture stream on device 0,
-/// in card-number order (so a card plugged in later comes last).
-pub fn capture_cards() -> Vec<OutputDevice> {
+/// Every ALSA card currently present that has a capture stream on device 0.
+fn present_capture_cards() -> Vec<OutputDevice> {
     alsa::card::Iter::new()
         .filter_map(|c| c.ok())
         .filter_map(|c| Ctl::from_card(&c, false).ok())
@@ -68,9 +112,10 @@ pub fn capture_cards() -> Vec<OutputDevice> {
         .collect()
 }
 
-/// True if an ALSA card with this short id currently exists.
+/// True if an ALSA card with this short id currently exists. Not held back
+/// by the settle delay, since the watcher does its own wait.
 pub(crate) fn card_present(id: &str) -> bool {
-    cards().iter().any(|c| c.id == id)
+    present_cards().iter().any(|c| c.id == id)
 }
 
 /// Starts watching for hotplug changes in the background, for whichever
@@ -248,6 +293,39 @@ mod tests {
     }
 
     const NO_SETTLE: Duration = Duration::from_millis(1);
+
+    fn card(id: &str) -> OutputDevice {
+        OutputDevice {
+            id: id.to_string(),
+            name: id.to_string(),
+        }
+    }
+
+    fn ids(cards: Vec<OutputDevice>) -> Vec<String> {
+        cards.into_iter().map(|c| c.id).collect()
+    }
+
+    #[test]
+    fn a_new_card_is_listed_only_after_the_settle_delay() {
+        let seen = Mutex::new(Vec::new());
+        let start = Instant::now();
+        let delay = Duration::from_secs(5);
+        assert!(settled(&seen, vec![card("A")], start, delay).is_empty());
+        assert!(settled(&seen, vec![card("A")], start + Duration::from_secs(4), delay).is_empty());
+        assert_eq!(ids(settled(&seen, vec![card("A")], start + delay, delay)), ["A"]);
+    }
+
+    #[test]
+    fn a_removed_card_drops_out_at_once_and_waits_again_when_back() {
+        let seen = Mutex::new(Vec::new());
+        let start = Instant::now();
+        let delay = Duration::from_secs(5);
+        settled(&seen, vec![card("A"), card("B")], start, delay);
+        let later = start + delay;
+        assert_eq!(ids(settled(&seen, vec![card("A")], later, delay)), ["A"]);
+        let back = later + Duration::from_secs(1);
+        assert_eq!(ids(settled(&seen, vec![card("A"), card("B")], back, delay)), ["A"]);
+    }
 
     #[test]
     fn absent_at_start_reports_nothing() {
