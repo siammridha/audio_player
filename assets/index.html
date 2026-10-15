@@ -860,6 +860,23 @@
     if (capture && capture.device) captureChoiceEl.value = capture.device;
   }
 
+  // The page counts the recording time itself, because pushed updates
+  // arrive at uneven times and would make the seconds jump. It only follows
+  // the server's time when the two are more than a second apart.
+  let recordStartedAt = null;
+  let recordTimeTimer = null;
+
+  function tickRecordTime() {
+    clearTimeout(recordTimeTimer);
+    if (recordStartedAt == null) {
+      captureTimeEl.textContent = formatClock(0);
+      return;
+    }
+    const ms = performance.now() - recordStartedAt;
+    captureTimeEl.textContent = formatClock(ms / 1000);
+    recordTimeTimer = setTimeout(tickRecordTime, 1000 - (ms % 1000));
+  }
+
   function renderCapture(capture) {
     const hasDevice = !!capture.device;
     const recording = capture.recording;
@@ -880,7 +897,15 @@
     captureFileEl.textContent = recording
       ? capture.file
       : hasDevice ? "Start recording" : "Recording unavailable";
-    captureTimeEl.textContent = formatClock(recording ? capture.elapsed : 0);
+    if (recording) {
+      const startedAt = performance.now() - capture.elapsed * 1000;
+      if (recordStartedAt == null || Math.abs(startedAt - recordStartedAt) > 1000) {
+        recordStartedAt = startedAt;
+      }
+    } else {
+      recordStartedAt = null;
+    }
+    tickRecordTime();
     captureSizeEl.textContent = formatSize(recording ? capture.bytes : 0);
     const { freeBytes, totalBytes } = capture;
     captureFreeEl.textContent = freeBytes != null ? formatSize(freeBytes) : "?";
@@ -953,6 +978,32 @@
     modesEl.scrollTo({ left: mode === "capture" ? modesEl.clientWidth : 0, behavior: "instant" });
   });
 
+  // Like the recording time, the page counts the play position itself and
+  // only follows the server's when the two are more than a second apart.
+  let playStartedAt = null;
+  let playDuration = null;
+  let playLoop = false;
+  let playTimeTimer = null;
+
+  function showPosition(seconds) {
+    timeCurrentEl.textContent = formatTime(seconds);
+    const pct = playDuration ? Math.min(100, (seconds / playDuration) * 100) : 0;
+    progressFillEl.style.width = `${pct}%`;
+  }
+
+  function tickPlayTime() {
+    clearTimeout(playTimeTimer);
+    let ms = performance.now() - playStartedAt;
+    const end = playDuration ? playDuration * 1000 : Infinity;
+    if (ms >= end && !playLoop) {
+      showPosition(playDuration);
+      return;
+    }
+    ms %= end;
+    showPosition(ms / 1000);
+    playTimeTimer = setTimeout(tickPlayTime, 1000 - (ms % 1000));
+  }
+
   function renderStatus(status) {
     if (!status) return;
     lastStatus = status;
@@ -975,15 +1026,19 @@
       nowPlayingCaptionEl.style.visibility = "hidden";
     }
 
-    if (status.file) {
-      timeCurrentEl.textContent = formatTime(status.position);
-      timeTotalEl.textContent = status.duration != null ? formatTime(status.duration) : "0:00";
-      const pct = status.duration ? Math.min(100, (status.position / status.duration) * 100) : 0;
-      progressFillEl.style.width = `${pct}%`;
+    playDuration = status.file ? status.duration : null;
+    playLoop = status.loop;
+    timeTotalEl.textContent = playDuration != null ? formatTime(playDuration) : "0:00";
+    if (status.file && status.playing) {
+      const startedAt = performance.now() - status.position * 1000;
+      if (playStartedAt == null || Math.abs(startedAt - playStartedAt) > 1000) {
+        playStartedAt = startedAt;
+      }
+      tickPlayTime();
     } else {
-      timeCurrentEl.textContent = "0:00";
-      timeTotalEl.textContent = "0:00";
-      progressFillEl.style.width = "0%";
+      playStartedAt = null;
+      clearTimeout(playTimeTimer);
+      showPosition(status.file ? status.position : 0);
     }
 
     playPauseEl.disabled = !status.file;

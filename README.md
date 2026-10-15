@@ -130,7 +130,9 @@ the page. Deleting the track that's loaded stops it first.
   (`/api/capture-devices`) and `files` (`/api/files`). A thread in
   `main.rs` checks the status every second (every 250 ms in Capture mode)
   and the card and file lists every second, and an event is only sent when
-  its data changed. Any button press sends `status` and `files` right
+  its data changed. The page counts the play position and the recording
+  time itself, so they tick once a second, and only follows the server's
+  when the two are more than a second apart. Any button press sends `status` and `files` right
   away, so every phone follows along. A page that connects (or reconnects)
   gets the latest copy of all four first. Each page's stream runs on its
   own thread, so it doesn't use up a request worker.
