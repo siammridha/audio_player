@@ -1,204 +1,257 @@
-//! Watches for an ALSA sound card appearing/disappearing (hotplug), without
-//! udev: this listens straight to the kernel's own netlink broadcast, since
-//! the device this runs on (Alpine, mdev) has no udev daemon to rely on.
+//! Keeps the list of ALSA sound cards up to date, and says when each card
+//! can be used. Works without udev: this listens straight to the kernel's
+//! own netlink broadcast, since the device this runs on (Alpine, mdev) has
+//! no udev daemon to rely on.
 //!
-//! Design, matched to real hardware behavior:
-//! - An event is only ever a hint to go recheck reality (`card_present`),
-//!   never trusted for its own content beyond which subsystem it's about.
-//! - Only a flip in known presence is reported; repeated/duplicate events
-//!   are ignored.
-//! - A newly-appeared card gets a settle delay before anything acts on it
-//!   (the card needs a moment after showing up before it's safe to open),
-//!   re-checked after the wait - if it's gone again, that wait is discarded
-//!   rather than confirming a card that's no longer there.
-//! - A card disappearing is reported immediately, no delay.
-//! - The card lists (`cards`, `capture_cards`) hold a new card back for the
-//!   same settle delay, so the page, the output picker and Capture mode all
-//!   see it at the same time as the output switches to it.
-//! - No polling fallback: presence is learned only from netlink events (plus
-//!   the one check done at startup, so a caller need not wait for an event
-//!   to learn the current state).
+//! - A kernel event is only a hint to re-read `/proc/asound/cards`. Reading
+//!   `/proc` never opens a card, so keeping the lists never touches the
+//!   hardware.
+//! - A new card is listed at once, but only marked ready (safe to open)
+//!   once it has stayed for its settle delay (`settle_delay`). Some USB
+//!   cards misbehave when opened right after they appear.
+//! - If a card goes away during that wait, it's not marked ready, and its
+//!   next plug-in waits again from the start.
+//! - A card that goes away is dropped at once.
+//! - No polling fallback: the lists change only on kernel events (plus the
+//!   one read in `start`).
 
+use std::fs;
 use std::os::unix::io::RawFd;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::path::Path;
+use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
-
-use alsa::ctl::Ctl;
+use std::time::Duration;
 
 use super::OutputDevice;
 
 const SETTLE_DELAY: Duration = Duration::from_secs(5);
+/// Shorter than `SETTLE_DELAY` because the BlueTrm capture card resets
+/// itself about 4.8 s after connecting unless something records from it.
+const CAPTURE_SETTLE_DELAY: Duration = Duration::from_secs(3);
 const SOCKET_OPEN_RETRIES: u32 = 5;
 const SOCKET_RETRY_DELAY: Duration = Duration::from_secs(1);
 const RECV_BUF_LEN: usize = 8192;
+const CARDS_FILE: &str = "/proc/asound/cards";
 
-/// When each card in a list was first seen, so it's only listed once it has
-/// been present for `SETTLE_DELAY`. One per list, since each list only
-/// knows about its own cards.
-static SEEN_CARDS: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
-static SEEN_CAPTURE_CARDS: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
+static CARDS: Mutex<Cards> = Mutex::new(Cards::new());
+static LISTENERS: Mutex<Vec<Box<dyn Fn() + Send>>> = Mutex::new(Vec::new());
 
-/// Every ALSA card that has been present for the settle delay.
-pub fn cards() -> Vec<OutputDevice> {
-    settled(&SEEN_CARDS, present_cards(), Instant::now(), SETTLE_DELAY)
+struct Cards {
+    /// In card-number order, so a card plugged in later comes last.
+    list: Vec<Card>,
+    next_detection: u64,
 }
 
-/// Every ALSA card that has been present for the settle delay and has a
-/// capture stream on device 0, in card-number order (so a card plugged in
-/// later comes last).
-pub fn capture_cards() -> Vec<OutputDevice> {
-    settled(&SEEN_CAPTURE_CARDS, present_capture_cards(), Instant::now(), SETTLE_DELAY)
-}
-
-/// Keeps `seen` up to date with `present`, and returns the cards in
-/// `present` first seen at least `delay` before `now`.
-fn settled(
-    seen: &Mutex<Vec<(String, Instant)>>,
-    present: Vec<OutputDevice>,
-    now: Instant,
-    delay: Duration,
-) -> Vec<OutputDevice> {
-    let mut seen = seen.lock().unwrap();
-    seen.retain(|(id, _)| present.iter().any(|c| &c.id == id));
-    for card in &present {
-        if !seen.iter().any(|(id, _)| id == &card.id) {
-            seen.push((card.id.clone(), now));
+impl Cards {
+    const fn new() -> Self {
+        Self {
+            list: Vec::new(),
+            next_detection: 0,
         }
     }
-    present
-        .into_iter()
-        .filter(|c| {
-            seen.iter()
-                .any(|(id, since)| id == &c.id && now.duration_since(*since) >= delay)
-        })
+}
+
+struct Card {
+    number: u32,
+    device: OutputDevice,
+    capture: bool,
+    ready: bool,
+    /// Different for every plug-in, so a wait only marks ready the plug-in
+    /// it was started for.
+    detection: u64,
+}
+
+/// A card as read from `/proc`.
+struct Found {
+    number: u32,
+    device: OutputDevice,
+    capture: bool,
+}
+
+/// Reads the cards that are already there, then keeps the lists up to date
+/// in the background. Call once.
+pub fn start() {
+    rescan();
+    thread::spawn(|| uevent_listener(rescan));
+}
+
+/// Calls `on_change` every time a card is added, becomes ready or goes away.
+pub fn subscribe(on_change: impl Fn() + Send + 'static) {
+    LISTENERS.lock().unwrap().push(Box::new(on_change));
+}
+
+/// Every card, ready or not.
+pub fn cards() -> Vec<OutputDevice> {
+    listed(|_| true)
+}
+
+/// Every card with a capture stream on device 0, ready or not.
+pub fn capture_cards() -> Vec<OutputDevice> {
+    listed(|c| c.capture)
+}
+
+/// The capture cards that are safe to open.
+pub fn ready_capture_cards() -> Vec<OutputDevice> {
+    listed(|c| c.capture && c.ready)
+}
+
+/// True if the card with this short id is there and safe to open.
+pub(crate) fn card_ready(id: &str) -> bool {
+    CARDS
+        .lock()
+        .unwrap()
+        .list
+        .iter()
+        .any(|c| c.device.id == id && c.ready)
+}
+
+fn listed(keep: impl Fn(&Card) -> bool) -> Vec<OutputDevice> {
+    CARDS
+        .lock()
+        .unwrap()
+        .list
+        .iter()
+        .filter(|c| keep(c))
+        .map(|c| c.device.clone())
         .collect()
 }
 
-/// Every ALSA card currently present.
-///
-/// `id` is `snd_ctl_card_info_get_id` - the short id shown by `aplay -l` and
-/// used in `CARD=` device strings (e.g. "Device"). `name` is the longer
-/// descriptive string (e.g. "USB PnP Sound Device"), a different field that
-/// never matches the short id.
-fn present_cards() -> Vec<OutputDevice> {
-    alsa::card::Iter::new()
-        .filter_map(|c| c.ok())
-        .filter_map(|c| Ctl::from_card(&c, false).ok())
-        .filter_map(|ctl| ctl.card_info().ok())
-        .filter_map(|info| {
-            Some(OutputDevice {
-                id: info.get_id().ok()?.to_string(),
-                name: info.get_name().ok()?.to_string(),
-            })
-        })
-        .collect()
-}
-
-/// Every ALSA card currently present that has a capture stream on device 0.
-fn present_capture_cards() -> Vec<OutputDevice> {
-    alsa::card::Iter::new()
-        .filter_map(|c| c.ok())
-        .filter_map(|c| Ctl::from_card(&c, false).ok())
-        .filter(|ctl| ctl.pcm_info(0, 0, alsa::Direction::Capture).is_ok())
-        .filter_map(|ctl| ctl.card_info().ok())
-        .filter_map(|info| {
-            Some(OutputDevice {
-                id: info.get_id().ok()?.to_string(),
-                name: info.get_name().ok()?.to_string(),
-            })
-        })
-        .collect()
-}
-
-/// True if an ALSA card with this short id currently exists. Not held back
-/// by the settle delay, since the watcher does its own wait.
-pub(crate) fn card_present(id: &str) -> bool {
-    present_cards().iter().any(|c| c.id == id)
-}
-
-/// Starts watching for hotplug changes in the background, for whichever
-/// card `card_name` holds at the time (the caller may change it while
-/// running). `on_change` is called with the confirmed presence state on
-/// every real flip (after the settle delay for an appearance, immediately
-/// for a disappearance). It never fires for the current state at startup -
-/// call `card_present` yourself first if you need that.
-pub fn watch(card_name: Arc<Mutex<String>>, on_change: impl Fn(bool) + Send + 'static) {
-    let (recheck_tx, recheck_rx) = mpsc::channel();
-    thread::spawn(move || uevent_listener(recheck_tx));
-    thread::spawn(move || {
-        let check_name = Arc::clone(&card_name);
-        run_presence_loop(
-            move || card_present(&check_name.lock().unwrap()),
-            move |present| {
-                let name = card_name.lock().unwrap().clone();
-                if present {
-                    crate::log::info(&format!("device_watch: {name} sound card detected"));
-                } else {
-                    crate::log::info(&format!("device_watch: {name} sound card disconnected"));
-                }
-                on_change(present);
-            },
-            recheck_rx,
-            SETTLE_DELAY,
-        )
-    });
-}
-
-/// The presence state machine, decoupled from real ALSA/netlink so it can be
-/// unit-tested with a fake `check` and a short `settle`.
-fn run_presence_loop(
-    check: impl Fn() -> bool,
-    on_change: impl Fn(bool),
-    recheck: Receiver<()>,
-    settle: Duration,
-) {
-    let mut known_present = false;
-    if check() {
-        known_present = settle_and_confirm(&check, settle, &on_change);
+fn notify() {
+    for on_change in LISTENERS.lock().unwrap().iter() {
+        on_change();
     }
+}
 
-    while recheck.recv().is_ok() {
-        let now_present = check();
-        if now_present == known_present {
+fn rescan() {
+    let (changed, new) = update(&mut CARDS.lock().unwrap(), read_cards());
+    for (id, detection, delay) in new {
+        thread::spawn(move || wait_then_mark_ready(id, detection, delay));
+    }
+    if changed {
+        notify();
+    }
+}
+
+/// How long a new card must stay before it's marked ready.
+fn settle_delay(capture: bool) -> Duration {
+    if capture {
+        CAPTURE_SETTLE_DELAY
+    } else {
+        SETTLE_DELAY
+    }
+}
+
+fn wait_then_mark_ready(id: String, detection: u64, delay: Duration) {
+    crate::log::debug(&format!(
+        "device_watch: waiting {delay:?} before using the {id} sound card"
+    ));
+    thread::sleep(delay);
+    rescan();
+    if mark_ready(&mut CARDS.lock().unwrap(), detection) {
+        crate::log::info(&format!("device_watch: {id} sound card ready"));
+        notify();
+    } else {
+        crate::log::debug(&format!(
+            "device_watch: {id} sound card went away during the {delay:?} wait, not using it"
+        ));
+    }
+}
+
+/// Brings `cards` in line with `found`. Returns whether anything changed,
+/// and the id, detection and settle delay of each new card, to wait on.
+fn update(cards: &mut Cards, found: Vec<Found>) -> (bool, Vec<(String, u64, Duration)>) {
+    let before = cards.list.len();
+    cards.list.retain(|card| {
+        let still_there = found.iter().any(|f| f.device.id == card.device.id);
+        if !still_there {
+            crate::log::info(&format!(
+                "device_watch: {} sound card disconnected",
+                card.device.id
+            ));
+        }
+        still_there
+    });
+    let removed = cards.list.len() != before;
+
+    let mut new = Vec::new();
+    for f in found {
+        if cards.list.iter().any(|c| c.device.id == f.device.id) {
             continue;
         }
-        if now_present {
-            known_present = settle_and_confirm(&check, settle, &on_change);
-        } else {
-            known_present = false;
-            on_change(false);
+        let detection = cards.next_detection;
+        cards.next_detection += 1;
+        crate::log::info(&format!(
+            "device_watch: {} sound card detected",
+            f.device.id
+        ));
+        new.push((f.device.id.clone(), detection, settle_delay(f.capture)));
+        cards.list.push(Card {
+            number: f.number,
+            device: f.device,
+            capture: f.capture,
+            ready: false,
+            detection,
+        });
+    }
+    cards.list.sort_by_key(|c| c.number);
+    (removed || !new.is_empty(), new)
+}
+
+/// Marks the card ready if this same plug-in is still there.
+fn mark_ready(cards: &mut Cards, detection: u64) -> bool {
+    match cards.list.iter_mut().find(|c| c.detection == detection) {
+        Some(card) => {
+            card.ready = true;
+            true
         }
+        None => false,
     }
 }
 
-/// Waits out the settle delay, then re-checks. Returns whether the card is
-/// still there (and, if so, has already reported it via `on_change(true)`).
-fn settle_and_confirm(
-    check: &impl Fn() -> bool,
-    settle: Duration,
-    on_change: &impl Fn(bool),
-) -> bool {
-    crate::log::debug(&format!(
-        "device_watch: sound card noticed, waiting {settle:?} before using it"
-    ));
-    thread::sleep(settle);
-    if check() {
-        on_change(true);
-        true
-    } else {
-        crate::log::debug(
-            "device_watch: sound card vanished again during the settle wait, ignoring",
-        );
-        false
-    }
+fn read_cards() -> Vec<Found> {
+    let text = match fs::read_to_string(CARDS_FILE) {
+        Ok(text) => text,
+        Err(e) => {
+            crate::log::error(&format!("device_watch: failed to read {CARDS_FILE}: {e}"));
+            String::new()
+        }
+    };
+    parse_cards(&text)
+        .into_iter()
+        .map(|(number, device)| Found {
+            number,
+            device,
+            capture: Path::new(&format!("/sys/class/sound/pcmC{number}D0c")).exists(),
+        })
+        .collect()
 }
 
-/// Opens the kernel uevent netlink socket and, for every event about the
-/// "sound" subsystem, pings `recheck` so the presence loop goes and checks
-/// reality. Gives up (and stops watching) if the socket can't be opened.
-fn uevent_listener(recheck: Sender<()>) {
+/// Parses `/proc/asound/cards`. Each card's first line looks like
+/// ` 1 [Device         ]: USB-Audio - USB PnP Sound Device`: the number,
+/// the short id (used in `CARD=` device strings), the driver, then the
+/// name. The second line of each card has no number and is skipped.
+fn parse_cards(text: &str) -> Vec<(u32, OutputDevice)> {
+    text.lines()
+        .filter_map(|line| {
+            let (number, rest) = line.trim_start().split_once(" [")?;
+            let number = number.parse().ok()?;
+            let (id, rest) = rest.split_once("]: ")?;
+            let (_driver, name) = rest.split_once(" - ")?;
+            Some((
+                number,
+                OutputDevice {
+                    id: id.trim().to_string(),
+                    name: name.trim().to_string(),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Opens the kernel uevent netlink socket and calls `on_sound_event` for
+/// every event about the "sound" subsystem. Gives up (and stops watching)
+/// if the socket can't be opened.
+fn uevent_listener(on_sound_event: impl Fn()) {
     let Some(fd) = open_socket_with_retries() else {
         crate::log::error(&format!(
             "device_watch: failed to open netlink socket after {SOCKET_OPEN_RETRIES} attempts, giving up on hotplug detection"
@@ -216,8 +269,8 @@ fn uevent_listener(recheck: Sender<()>) {
         let is_sound_event = msg
             .split(|&b| b == 0)
             .any(|field| field == b"SUBSYSTEM=sound");
-        if is_sound_event && recheck.send(()).is_err() {
-            break;
+        if is_sound_event {
+            on_sound_event();
         }
     }
     unsafe { libc::close(fd) };
@@ -270,144 +323,133 @@ fn open_uevent_socket() -> Option<RawFd> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
 
-    /// A `check` fake driven by a scripted sequence of results, one per
-    /// call; the last value repeats once the script runs out.
-    fn scripted_check(script: Vec<bool>) -> impl Fn() -> bool {
-        let script = Arc::new(Mutex::new(script));
-        move || {
-            let mut script = script.lock().unwrap();
-            if script.len() > 1 {
-                script.remove(0)
-            } else {
-                *script.first().unwrap()
-            }
+    fn found(number: u32, id: &str) -> Found {
+        Found {
+            number,
+            device: OutputDevice {
+                id: id.to_string(),
+                name: id.to_string(),
+            },
+            capture: true,
         }
     }
 
-    fn recording_on_change() -> (impl Fn(bool), Arc<Mutex<Vec<bool>>>) {
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let recorder = Arc::clone(&calls);
-        (move |present| recorder.lock().unwrap().push(present), calls)
+    fn ids(cards: &Cards) -> Vec<&str> {
+        cards.list.iter().map(|c| c.device.id.as_str()).collect()
     }
 
-    const NO_SETTLE: Duration = Duration::from_millis(1);
-
-    fn card(id: &str) -> OutputDevice {
-        OutputDevice {
-            id: id.to_string(),
-            name: id.to_string(),
-        }
-    }
-
-    fn ids(cards: Vec<OutputDevice>) -> Vec<String> {
-        cards.into_iter().map(|c| c.id).collect()
+    fn ready(cards: &Cards, id: &str) -> bool {
+        cards.list.iter().any(|c| c.device.id == id && c.ready)
     }
 
     #[test]
-    fn a_new_card_is_listed_only_after_the_settle_delay() {
-        let seen = Mutex::new(Vec::new());
-        let start = Instant::now();
-        let delay = Duration::from_secs(5);
-        assert!(settled(&seen, vec![card("A")], start, delay).is_empty());
-        assert!(settled(&seen, vec![card("A")], start + Duration::from_secs(4), delay).is_empty());
-        assert_eq!(ids(settled(&seen, vec![card("A")], start + delay, delay)), ["A"]);
+    fn parses_the_proc_card_list() {
+        let text = " 0 [rt5670         ]: cht-bsw-rt5670 - cht-bsw-rt5670\n\
+                    \x20                     Dell Inc.-Wyse 3040\n\
+                    \x201 [Device         ]: USB-Audio - USB PnP Sound Device\n\
+                    \x20                     C-Media Electronics Inc. USB PnP Sound Device at usb-0000:00:14.0-1, full speed\n";
+        assert_eq!(
+            parse_cards(text),
+            vec![
+                (
+                    0,
+                    OutputDevice {
+                        id: "rt5670".to_string(),
+                        name: "cht-bsw-rt5670".to_string(),
+                    }
+                ),
+                (
+                    1,
+                    OutputDevice {
+                        id: "Device".to_string(),
+                        name: "USB PnP Sound Device".to_string(),
+                    }
+                ),
+            ]
+        );
     }
 
     #[test]
-    fn a_removed_card_drops_out_at_once_and_waits_again_when_back() {
-        let seen = Mutex::new(Vec::new());
-        let start = Instant::now();
-        let delay = Duration::from_secs(5);
-        settled(&seen, vec![card("A"), card("B")], start, delay);
-        let later = start + delay;
-        assert_eq!(ids(settled(&seen, vec![card("A")], later, delay)), ["A"]);
-        let back = later + Duration::from_secs(1);
-        assert_eq!(ids(settled(&seen, vec![card("A"), card("B")], back, delay)), ["A"]);
+    fn parses_no_cards() {
+        assert!(parse_cards("").is_empty());
+        assert!(parse_cards("--- no soundcards ---\n").is_empty());
     }
 
     #[test]
-    fn absent_at_start_reports_nothing() {
-        let (on_change, calls) = recording_on_change();
-        let (tx, rx) = mpsc::channel();
-        drop(tx);
-        run_presence_loop(|| false, on_change, rx, NO_SETTLE);
-        assert_eq!(*calls.lock().unwrap(), Vec::<bool>::new());
+    fn a_new_card_is_listed_at_once_but_not_ready() {
+        let mut cards = Cards::new();
+        let (changed, new) = update(&mut cards, vec![found(1, "Device")]);
+        assert!(changed);
+        assert_eq!(new, vec![("Device".to_string(), 0, CAPTURE_SETTLE_DELAY)]);
+        assert_eq!(ids(&cards), ["Device"]);
+        assert!(!ready(&cards, "Device"));
     }
 
     #[test]
-    fn present_at_start_confirms_after_settling() {
-        let (on_change, calls) = recording_on_change();
-        let (tx, rx) = mpsc::channel();
-        drop(tx);
-        run_presence_loop(|| true, on_change, rx, NO_SETTLE);
-        assert_eq!(*calls.lock().unwrap(), vec![true]);
+    fn a_card_that_cannot_record_waits_longer() {
+        let mut cards = Cards::new();
+        let playback_only = Found {
+            capture: false,
+            ..found(1, "Audio")
+        };
+        let (_, new) = update(&mut cards, vec![playback_only]);
+        assert_eq!(new, vec![("Audio".to_string(), 0, SETTLE_DELAY)]);
     }
 
     #[test]
-    fn appears_after_start_and_confirms() {
-        let (on_change, calls) = recording_on_change();
-        let (tx, rx) = mpsc::channel();
-        let check = scripted_check(vec![false, true, true]);
-        tx.send(()).unwrap();
-        drop(tx);
-        run_presence_loop(check, on_change, rx, NO_SETTLE);
-        assert_eq!(*calls.lock().unwrap(), vec![true]);
+    fn the_same_cards_again_change_nothing() {
+        let mut cards = Cards::new();
+        update(&mut cards, vec![found(0, "A"), found(1, "B")]);
+        let (changed, new) = update(&mut cards, vec![found(0, "A"), found(1, "B")]);
+        assert!(!changed);
+        assert!(new.is_empty());
     }
 
     #[test]
-    fn disappears_immediately_with_no_settle_wait() {
-        let (on_change, calls) = recording_on_change();
-        let (tx, rx) = mpsc::channel();
-        // Present at start (confirms), then an event finds it gone. The
-        // disappear branch in run_presence_loop never calls
-        // settle_and_confirm, so this doesn't wait out `settle` at all -
-        // that's checked directly, not by timing.
-        let check = scripted_check(vec![true, true, false]);
-        tx.send(()).unwrap();
-        drop(tx);
-        run_presence_loop(check, on_change, rx, NO_SETTLE);
-        assert_eq!(*calls.lock().unwrap(), vec![true, false]);
+    fn a_removed_card_drops_out_at_once() {
+        let mut cards = Cards::new();
+        update(&mut cards, vec![found(0, "A"), found(1, "B")]);
+        let (changed, new) = update(&mut cards, vec![found(0, "A")]);
+        assert!(changed);
+        assert!(new.is_empty());
+        assert_eq!(ids(&cards), ["A"]);
     }
 
     #[test]
-    fn gone_during_settle_wait_is_not_confirmed() {
-        let (on_change, calls) = recording_on_change();
-        let (tx, rx) = mpsc::channel();
-        // Appears, but by the time the settle wait ends it's gone again.
-        let check = scripted_check(vec![false, true, false]);
-        tx.send(()).unwrap();
-        drop(tx);
-        run_presence_loop(check, on_change, rx, NO_SETTLE);
-        assert_eq!(*calls.lock().unwrap(), Vec::<bool>::new());
+    fn cards_stay_in_number_order() {
+        let mut cards = Cards::new();
+        update(&mut cards, vec![found(2, "C")]);
+        update(&mut cards, vec![found(0, "A"), found(2, "C")]);
+        assert_eq!(ids(&cards), ["A", "C"]);
     }
 
     #[test]
-    fn a_gone_and_confirmed_appearance_is_treated_as_fresh_next_time() {
-        let (on_change, calls) = recording_on_change();
-        let (tx, rx) = mpsc::channel();
-        // Appears, vanishes during settle (not confirmed), then appears
-        // again for real and should confirm normally.
-        let check = scripted_check(vec![false, true, false, true, true]);
-        tx.send(()).unwrap();
-        tx.send(()).unwrap();
-        drop(tx);
-        run_presence_loop(check, on_change, rx, NO_SETTLE);
-        assert_eq!(*calls.lock().unwrap(), vec![true]);
+    fn a_card_still_there_after_the_wait_is_ready() {
+        let mut cards = Cards::new();
+        let (_, new) = update(&mut cards, vec![found(1, "Device")]);
+        assert!(mark_ready(&mut cards, new[0].1));
+        assert!(ready(&cards, "Device"));
     }
 
     #[test]
-    fn duplicate_events_with_no_flip_are_ignored() {
-        let (on_change, calls) = recording_on_change();
-        let (tx, rx) = mpsc::channel();
-        let check = scripted_check(vec![true, true, true, true]);
-        tx.send(()).unwrap();
-        tx.send(()).unwrap();
-        drop(tx);
-        run_presence_loop(check, on_change, rx, NO_SETTLE);
-        // Only the initial confirmation fires; the repeated "still present"
-        // events after it don't flip anything, so no extra calls.
-        assert_eq!(*calls.lock().unwrap(), vec![true]);
+    fn a_card_gone_during_the_wait_is_not_ready() {
+        let mut cards = Cards::new();
+        let (_, new) = update(&mut cards, vec![found(1, "Device")]);
+        update(&mut cards, vec![]);
+        assert!(!mark_ready(&mut cards, new[0].1));
+        assert!(cards.list.is_empty());
+    }
+
+    #[test]
+    fn a_card_plugged_back_in_waits_again() {
+        let mut cards = Cards::new();
+        let (_, first) = update(&mut cards, vec![found(1, "Device")]);
+        update(&mut cards, vec![]);
+        let (_, second) = update(&mut cards, vec![found(1, "Device")]);
+        assert!(!mark_ready(&mut cards, first[0].1));
+        assert!(!ready(&cards, "Device"));
+        assert!(mark_ready(&mut cards, second[0].1));
+        assert!(ready(&cards, "Device"));
     }
 }

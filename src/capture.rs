@@ -341,10 +341,10 @@ fn finish(shared: &Shared, recording: Option<Recording>) {
     }
 }
 
-/// The card the user picked if it's present, otherwise the newest card that
-/// can record.
+/// The card the user picked if it's ready, otherwise the newest ready card
+/// that can record.
 pub fn pick_card(choice: &Option<String>) -> Option<OutputDevice> {
-    let cards = device_watch::capture_cards();
+    let cards = device_watch::ready_capture_cards();
     choice
         .as_ref()
         .and_then(|id| cards.iter().find(|c| &c.id == id).cloned())

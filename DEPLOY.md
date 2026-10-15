@@ -61,15 +61,17 @@ something looks wrong. What to expect at the default `INFO` level:
 - On startup: `starting on the built-in speaker ... checking for the
   Device sound card` (`Device` is the USB card's ALSA id; with a card
   picked on the page, its id shows here instead).
-- Plugging the card in: `Device sound card detected`, then about 5 seconds
-  later (a settle delay before it's touched) `switching to the Device sound
-  card`. Every new card gets the same wait before it shows up on the page,
-  including capture cards.
+- Plugging the card in: `Device sound card detected`, and it shows on the
+  page right away. After a short wait before it's opened (3 seconds for a
+  card that can record, like the C-Media and BlueTrm cards; 5 seconds for
+  one that can't) `Device sound card ready`, then `switching to the Device
+  sound card`. A card that drops out during that wait logs `disconnected`
+  and is never opened.
 - Unplugging it: `Device sound card disconnected`, then right away `falling
   back to the built-in speaker`.
 - Picking a card on the page: `switching to the <id> sound card` right
-  away if it's plugged in (no settle delay), otherwise `falling back to the
-  built-in speaker`.
+  away if it's ready, otherwise `falling back to the built-in speaker`
+  until it is (a card picked during its wait switches once it's ready).
 - Using the web page: `playing <file>` and `paused playback`/`resumed
   playback`, so you can tell from the log alone whether a button press on
   the page actually reached the player.
@@ -95,7 +97,7 @@ the row left); that logs `deleted <file>`.
 **Log level:** a normal install (`deploy/install.sh`) sets the service to
 `RUST_LOG=error`, so only failures are logged - the lines above stay
 silent unless you turn it up. To see them (or `DEBUG`-level detail, like
-volume changes and the settle-wait timing around hotplug), edit
+volume changes and the wait around hotplug), edit
 `/etc/conf.d/audio-player` on the device:
 
 ```sh

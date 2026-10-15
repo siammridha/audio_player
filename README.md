@@ -78,17 +78,19 @@ the page. Deleting the track that's loaded stops it first.
     picked on the page) when it's plugged in, and falls back to the Wyse
     3040's built-in speaker otherwise - see `device_watch.rs` below for how
     that's detected.
-  - `device_watch.rs` - lists the sound cards, and watches for the wanted
-    card appearing/disappearing (it follows the new card when the choice
-    changes). Listens straight to the kernel's netlink hotplug
-    broadcast (no udev - this device runs mdev), rechecking the actual ALSA
-    card list on every event rather than trusting the event's contents, and
-    only acts on a real change in presence. A newly-appeared card gets a
-    5-second settle delay (re-checked after the wait) before anything opens
-    it; a disappearing card is acted on immediately. The card lists use the
-    same delay: a new card only appears in the output list, the capture
-    list and Capture mode once it has been there for 5 seconds, so every
-    card shows up at the same time as the output switches to it.
+  - `device_watch.rs` - keeps the list of sound cards and says when each
+    one is safe to use. Listens straight to the kernel's netlink hotplug
+    broadcast (no udev - this device runs mdev), and on every sound event
+    re-reads `/proc/asound/cards` rather than trusting the event's
+    contents. Reading `/proc` never opens a card, so the lists never touch
+    the hardware. Whether a card can record comes from
+    `/sys/class/sound/pcmC<N>D0c`. A new card shows in the output and
+    capture lists right away, but nothing opens it (playback switching or
+    Capture mode) until it has stayed for 3 seconds if it can record, or 5
+    seconds otherwise (the BlueTrm capture card resets itself about 4.8
+    seconds after connecting unless something records from it); if it goes
+    away during that wait, its next plug-in waits again. A card that goes away is dropped at once. Every
+    change is pushed to the page straight away; there is no polling.
   - `mock_backend.rs` - in-memory only, no sound card needed. Used by tests.
     Pretends to have two capture cards, and writes a real silent WAV when a
     recording stops.
@@ -130,7 +132,8 @@ the page. Deleting the track that's loaded stops it first.
   `status` (`/api/status`), `devices` (`/api/devices`), `capture-devices`
   (`/api/capture-devices`) and `files` (`/api/files`). A thread in
   `main.rs` checks the status every second (every 250 ms in Capture mode)
-  and the card and file lists every second, and an event is only sent when
+  and the file list every second; the card lists are sent by
+  `device_watch.rs` whenever a card changes. An event is only sent when
   its data changed. The page counts the play position and the recording
   time itself, so they tick once a second, and only follows the server's
   when the two are more than a second apart. Any button press sends `status` and `files` right
@@ -158,8 +161,9 @@ See [DEPLOY.md](DEPLOY.md) for how to get it running on the device.
 This dev container is arm64 and has no sound card, so the real (ALSA)
 backend can't be run or tested here - only the mock backend can. That's
 enough to develop and test the web page and API. `device_watch.rs`'s
-presence-detection logic (the settle delay, only-report-real-changes rule,
-etc.) is decoupled from real ALSA/netlink and has its own unit tests, which
+card-list logic (parsing `/proc/asound/cards`, adding and dropping cards,
+and marking a card ready only if it stayed for its 3- or 5-second wait) is kept
+apart from the real `/proc` and netlink and has its own unit tests, which
 do run here.
 
 ```sh

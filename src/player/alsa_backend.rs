@@ -90,9 +90,8 @@ enum Command {
     /// `AlsaPlayer::load_at`).
     Play(PathBuf, BoxedSource, u64),
     TogglePlayPause,
-    /// A confirmed flip in the watched card's presence, from `device_watch`.
-    /// Carries no flag: it may be about a card that was the target before a
-    /// `SetOutput`, so the feeder re-checks reality instead.
+    /// Some card was added, became ready or went away, from `device_watch`.
+    /// Carries no detail: the feeder re-checks whether its target is ready.
     CardChanged,
     SetOutput(OutputChoice),
     Unload,
@@ -139,9 +138,9 @@ impl AlsaPlayer {
     /// Opens `fallback_device` for playback right away (this has to
     /// succeed - it's the Wyse 3040's own sound chip, expected to always be
     /// there) and starts the background feeder thread that owns the active
-    /// PCM handle for the life of the process. Also starts watching the card
-    /// `output_choice` wants for hotplug; the feeder switches over to it once
-    /// it's confirmed present, and back to `fallback_device` if it's later
+    /// PCM handle for the life of the process. Also starts watching the
+    /// sound cards; the feeder switches over to the card `output_choice`
+    /// wants once it's ready, and back to `fallback_device` if it's later
     /// removed. `auto_device` is what Automatic mode plays through.
     pub fn new(
         auto_device: &str,
@@ -167,7 +166,6 @@ impl AlsaPlayer {
             looping: true,
             output_choice,
         }));
-        let watched_card = Arc::new(Mutex::new(target.card.clone()));
 
         let output = Output {
             pcm,
@@ -179,16 +177,16 @@ impl AlsaPlayer {
             target,
             auto_device: auto_device.to_string(),
             fallback_device: fallback_device.to_string(),
-            watched_card: Arc::clone(&watched_card),
             playback: Arc::clone(&playback),
             inner: Arc::clone(&inner),
         };
         thread::spawn(move || feeder_loop(feeder, cmd_rx));
 
         let watch_tx = cmd_tx.clone();
-        device_watch::watch(watched_card, move |_| {
+        device_watch::subscribe(move || {
             let _ = watch_tx.send(Command::CardChanged);
         });
+        device_watch::start();
 
         Ok(Arc::new(Self {
             inner,
@@ -501,20 +499,15 @@ struct Feeder {
     target: Target,
     auto_device: String,
     fallback_device: String,
-    /// Shared with `device_watch`, so it watches whichever card `target`
-    /// names.
-    watched_card: Arc<Mutex<String>>,
     playback: Arc<PlaybackState>,
     inner: Arc<Mutex<Inner>>,
 }
 
 impl Feeder {
-    /// Plays through the target card if it's present, otherwise the
-    /// built-in fallback.
+    /// Plays through the target card if it's ready, otherwise the built-in
+    /// fallback.
     fn follow_target(&mut self, current: Option<(&BoxedSource, bool)>) {
-        // Checked right before opening: closes the gap between the
-        // watcher's last confirmation and this exact moment.
-        if device_watch::card_present(&self.target.card) {
+        if device_watch::card_ready(&self.target.card) {
             let device = self.target.device.clone();
             let card = self.target.card.clone();
             self.switch_to(&device, Some(card), current);
@@ -636,7 +629,6 @@ fn feeder_loop(mut feeder: Feeder, cmd_rx: mpsc::Receiver<Command>) {
             }
             Ok(Command::SetOutput(choice)) => {
                 feeder.target = Target::for_choice(&choice, &feeder.auto_device);
-                *feeder.watched_card.lock().unwrap() = feeder.target.card.clone();
                 feeder.follow_target(active(&live, &current));
                 continue;
             }

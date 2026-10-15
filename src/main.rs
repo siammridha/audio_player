@@ -29,7 +29,7 @@ const WORKER_THREADS: usize = 4;
 /// the level meter moves smoothly.
 const STATUS_TICK_PLAY: Duration = Duration::from_secs(1);
 const STATUS_TICK_CAPTURE: Duration = Duration::from_millis(250);
-const LISTS_TICK: Duration = Duration::from_secs(1);
+const FILES_TICK: Duration = Duration::from_secs(1);
 const EVENTS_PING: Duration = Duration::from_secs(15);
 
 fn main() -> anyhow::Result<()> {
@@ -157,16 +157,22 @@ fn main() -> anyhow::Result<()> {
 
     {
         let state = Arc::clone(&state);
+        player::device_watch::subscribe(move || http::publish_devices(&state));
+    }
+    http::publish_devices(&state);
+
+    {
+        let state = Arc::clone(&state);
         std::thread::spawn(move || {
-            let mut lists_checked: Option<Instant> = None;
+            let mut files_checked: Option<Instant> = None;
             loop {
                 http::publish_status(&state);
-                // No hotplug event covers every card, so the lists are
-                // compared on a timer and only sent when they change.
-                if lists_checked.is_none_or(|t| t.elapsed() >= LISTS_TICK) {
-                    http::publish_devices(&state);
+                // Nothing announces a file added outside the page (e.g.
+                // copied in over SSH), so the list is compared on a timer
+                // and only sent when it changes.
+                if files_checked.is_none_or(|t| t.elapsed() >= FILES_TICK) {
                     http::publish_files(&state);
-                    lists_checked = Some(Instant::now());
+                    files_checked = Some(Instant::now());
                 }
                 std::thread::sleep(if state.player.status().mode == Mode::Capture {
                     STATUS_TICK_CAPTURE
