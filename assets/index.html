@@ -384,7 +384,7 @@
     background: transparent;
     color: var(--muted);
     border: none;
-    padding: 0.95rem 0.1rem;
+    padding: 1.25rem 0.1rem;
     font-size: 1.05rem;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
@@ -405,17 +405,28 @@
     top: 0;
     right: 0;
     bottom: 0;
-    width: 88px;
+    width: 120px;
     justify-content: center;
     gap: 0.35rem;
-    padding: 0;
-    background: #d93025;
-    color: #fff;
+    padding: 0 16px;
+    background: transparent;
+    color: var(--red);
     font-size: 0.9rem;
     font-weight: 600;
     transform: translateX(100%);
   }
-  #files .delete:active { background: #b3261e; }
+  /* The tinted button is drawn inset within its slot, so the open row
+     keeps a gap between its duration and the button. */
+  #files .delete::before {
+    content: "";
+    position: absolute;
+    inset: 8px 16px;
+    z-index: -1;
+    border-radius: 10px;
+    background: rgba(229, 57, 53, 0.14);
+  }
+  #files .delete:active { background: transparent; }
+  #files .delete:active::before { background: rgba(229, 57, 53, 0.24); }
   #files .delete svg { display: block; width: 18px; height: 18px; }
   #empty { color: var(--muted); font-size: 0.95rem; padding: 0.95rem 0.1rem; }
 
@@ -705,7 +716,7 @@
     }
   }
 
-  const DELETE_WIDTH = 88; // matches #files .delete
+  const DELETE_WIDTH = 120; // matches #files .delete
   let openRow = null;
 
   function setRowOffset(li, x, animate) {
