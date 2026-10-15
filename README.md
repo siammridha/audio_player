@@ -45,6 +45,9 @@ restart. In Capture mode:
   can record (USB inputs and the built-in one). Until one is picked, or
   while the picked one is missing, the newest card that can record is used.
   The choice is saved to `capture_device.json` next to `STATE_FILE`.
+  With no card that can record, the pill says "No capture device found",
+  the card's title reads "Recording unavailable", the rest of the card is
+  faded, and the record button is disabled.
 - The record button saves a WAV file named `capture-YYYY-MM-DD-HH-MM.wav`
   (local time) into the music folder, at 48 kHz, 16-bit, with the card's own
   channel count. The card shows how much has been recorded and how much
